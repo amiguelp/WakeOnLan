@@ -18,7 +18,7 @@
 
 # Versión del script. Al publicar una nueva, súbela aquí y crea la etiqueta
 # git "v<versión>" (ver README).
-$Version = '1.3.0'
+$Version = '1.4.0'
 $RepoGitHub = 'amiguelp/WakeOnLan'
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -298,6 +298,7 @@ $State = @{
     InicioEspera   = [DateTime]::MinValue
     UltimoWol      = [DateTime]::MinValue
     Comprobacion   = $null      # consulta de actualizaciones en curso
+    Apagando       = $null      # proceso shutdown.exe en curso
 }
 
 $Config = Read-Config
@@ -352,13 +353,8 @@ $txtBroadcast.Enabled = $chkBroadcast.Checked
 $ayuda = New-Object System.Windows.Forms.ToolTip
 $ayuda.SetToolTip($chkBroadcast,
     "Marcado: el WOL se envía por broadcast (y también a la IP del equipo si el campo está vacío).`nDesmarcado: solo a la IP del equipo.")
-$lblBcAyuda = New-Object System.Windows.Forms.Label
-$lblBcAyuda.Text = 'vacío = automático'
-$lblBcAyuda.ForeColor = [System.Drawing.Color]::Gray
-$lblBcAyuda.Location = New-Object System.Drawing.Point(355, 82)
-$lblBcAyuda.Size = New-Object System.Drawing.Size(100, 20)
-$lblBcAyuda.Enabled = $chkBroadcast.Checked
-$form.Controls.Add($lblBcAyuda)
+$ayuda.SetToolTip($txtBroadcast,
+    "Dirección de broadcast a la que enviar el WOL.`nVacío: automático (todas las redes locales y la red del equipo).")
 
 Add-Label 'Espera máxima (s):' 111
 $numEspera = New-Object System.Windows.Forms.NumericUpDown
@@ -390,15 +386,24 @@ $btnWol = New-Object System.Windows.Forms.Button
 $btnWol.Text = 'Encender (WOL)'
 $btnWol.Font = $fuenteBoton
 $btnWol.Location = New-Object System.Drawing.Point(15, 180)
-$btnWol.Size = New-Object System.Drawing.Size(212, 45)
+$btnWol.Size = New-Object System.Drawing.Size(139, 45)
 $form.Controls.Add($btnWol)
 
 $btnRdp = New-Object System.Windows.Forms.Button
 $btnRdp.Text = 'Conectar (RDP)'
 $btnRdp.Font = $fuenteBoton
-$btnRdp.Location = New-Object System.Drawing.Point(233, 180)
-$btnRdp.Size = New-Object System.Drawing.Size(212, 45)
+$btnRdp.Location = New-Object System.Drawing.Point(160, 180)
+$btnRdp.Size = New-Object System.Drawing.Size(139, 45)
 $form.Controls.Add($btnRdp)
+
+$btnApagar = New-Object System.Windows.Forms.Button
+$btnApagar.Text = 'Apagar'
+$btnApagar.Font = $fuenteBoton
+$btnApagar.Location = New-Object System.Drawing.Point(305, 180)
+$btnApagar.Size = New-Object System.Drawing.Size(140, 45)
+$form.Controls.Add($btnApagar)
+$ayuda.SetToolTip($btnApagar,
+    "Apaga el equipo con 'shutdown /s /m'. Necesita una cuenta con permisos de administrador en él (ver README).")
 
 $lblEspera = New-Object System.Windows.Forms.Label
 $lblEspera.Location = New-Object System.Drawing.Point(15, 232)
@@ -512,6 +517,7 @@ function Start-Espera {
     $State.UltimaSonda = [DateTime]::MinValue
     $btnRdp.Text = 'Cancelar espera'
     $btnWol.Enabled = $false
+    $btnApagar.Enabled = $false
     $txtEquipo.Enabled = $false
     $lblEspera.Text = 'Esperando a que arranque…'
 }
@@ -520,8 +526,56 @@ function Stop-Espera {
     $State.Esperando = $false
     $btnRdp.Text = 'Conectar (RDP)'
     $btnWol.Enabled = $true
+    $btnApagar.Enabled = -not $State.Apagando
     $txtEquipo.Enabled = $true
     $lblEspera.Text = ''
+}
+
+# Lanza shutdown.exe contra el equipo sin bloquear la ventana; el resultado
+# lo recoge el temporizador con Complete-Apagado.
+function Start-Apagado([string]$Equipo) {
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = "$env:windir\System32\shutdown.exe"
+    $psi.Arguments = "/s /f /t 0 /m \\$Equipo"
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    # shutdown.exe escribe en la página de códigos OEM de la consola (850 en español).
+    $oem = [Text.Encoding]::GetEncoding([Globalization.CultureInfo]::CurrentCulture.TextInfo.OEMCodePage)
+    $psi.StandardOutputEncoding = $oem
+    $psi.StandardErrorEncoding = $oem
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $State.Apagando = [pscustomobject]@{
+        Proceso = $p
+        Salida  = $p.StandardOutput.ReadToEndAsync()
+        Error   = $p.StandardError.ReadToEndAsync()
+        Equipo  = $Equipo
+    }
+    $btnApagar.Enabled = $false
+    $btnApagar.Text = 'Apagando…'
+}
+
+function Complete-Apagado($Apagado) {
+    $btnApagar.Text = 'Apagar'
+    $btnApagar.Enabled = -not $State.Esperando
+    $codigo = $Apagado.Proceso.ExitCode
+    $texto = (($Apagado.Error.Result, $Apagado.Salida.Result) -join ' ').Trim()
+    $Apagado.Proceso.Dispose()
+    if ($codigo -eq 0) {
+        Write-Log "Orden de apagado enviada a $($Apagado.Equipo)."
+        $State.UltimaSonda = [DateTime]::MinValue
+        return
+    }
+    Write-Log "No se ha podido apagar $($Apagado.Equipo) (código $codigo): $texto"
+    $pista = switch ($codigo) {
+        5       { "Acceso denegado. Tu usuario no es administrador en ese equipo, o es una cuenta local y Windows le quita los permisos en remoto (ver README)." }
+        53      { "No se encuentra la ruta de red. Comprueba que el equipo está encendido y que su firewall permite 'Compartir archivos e impresoras'." }
+        1115    { "Ya había un apagado en curso." }
+        default { '' }
+    }
+    $mensaje = "No se ha podido apagar el equipo:`n$texto`n`n$pista"
+    Show-Aviso $mensaje.Trim()
 }
 
 function Start-UpdateCheck([bool]$Manual) {
@@ -604,7 +658,6 @@ $lnkActualizar.Add_LinkClicked({ Start-UpdateCheck $true })
 
 $chkBroadcast.Add_CheckedChanged({
     $txtBroadcast.Enabled = $chkBroadcast.Checked
-    $lblBcAyuda.Enabled = $chkBroadcast.Checked
 })
 
 $btnWol.Add_Click({
@@ -613,6 +666,27 @@ $btnWol.Add_Click({
     if (Invoke-Wol $cfg) {
         # Comprobar pronto para ver cuándo arranca.
         $State.UltimaSonda = [DateTime]::MinValue
+    }
+})
+
+$btnApagar.Add_Click({
+    if ($State.Apagando) { return }
+    $equipo = $txtEquipo.Text.Trim()
+    if (-not $equipo) {
+        Show-Aviso 'Indica el nombre o la IP del equipo.'
+        return
+    }
+    $respuesta = [System.Windows.Forms.MessageBox]::Show($form,
+        "¿Apagar $equipo ahora?`n`nSe cerrarán sus programas sin guardar los cambios.",
+        'Apagar equipo', 'YesNo', 'Warning', 'Button2')
+    if ($respuesta -ne 'Yes') { return }
+    Save-Config (Get-FormConfig)
+    try {
+        Start-Apagado $equipo
+        Write-Log "Apagando $equipo…"
+    } catch {
+        Write-Log "Error al apagar: $($_.Exception.Message)"
+        Show-Aviso "No se ha podido lanzar el apagado:`n$($_.Exception.Message)"
     }
 })
 
@@ -691,6 +765,13 @@ $timer.Add_Tick({
         $comp.Cliente.Dispose()
         Complete-UpdateCheck $comp
         if ($form.IsDisposed -or -not $form.Visible) { return }
+    }
+
+    # Resultado del apagado.
+    $apagado = $State.Apagando
+    if ($apagado -and $apagado.Proceso.HasExited) {
+        $State.Apagando = $null
+        Complete-Apagado $apagado
     }
 
     # Recoger el resultado de la comprobación en curso.
