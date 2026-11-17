@@ -18,7 +18,7 @@
 
 # Versión del script. Al publicar una nueva, súbela aquí y crea la etiqueta
 # git "v<versión>" (ver README).
-$Version = '1.1.0'
+$Version = '1.2.0'
 $RepoGitHub = 'amiguelp/WakeOnLan'
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -257,6 +257,29 @@ function Install-Update([string]$Tag, [string]$Destino) {
             Copy-Item -Destination $Destino -Recurse -Force
     } finally {
         Remove-Item $zip, $temp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# Actualiza un clon git de la carpeta del script hasta la etiqueta indicada.
+# Solo avanza (fast-forward): si hay cambios locales sin guardar o la rama se
+# ha separado, no toca nada y lanza un error explicando qué pasa.
+function Update-GitClone([string]$Tag, [string]$Carpeta) {
+    function Invoke-Git {
+        $salida = & git -C $Carpeta @args 2>&1 | ForEach-Object { "$_" }
+        if ($LASTEXITCODE -ne 0) {
+            throw "git $($args -join ' ') ha fallado:`n$(($salida | Select-Object -Last 5) -join "`n")"
+        }
+        return $salida
+    }
+    if (Invoke-Git status --porcelain --untracked-files=no) {
+        throw 'La carpeta tiene cambios sin guardar en git. Guárdalos o descártalos y vuelve a intentarlo.'
+    }
+    [void](Invoke-Git fetch --tags origin)
+    $rama = (Invoke-Git rev-parse --abbrev-ref HEAD | Select-Object -Last 1).Trim()
+    if ($rama -eq 'HEAD') {
+        [void](Invoke-Git checkout --quiet $Tag)      # sin rama: ir directamente a la etiqueta
+    } else {
+        [void](Invoke-Git merge --ff-only --quiet $Tag)
     }
 }
 
@@ -520,10 +543,8 @@ function Complete-UpdateCheck($Comprobacion) {
     $lblVersion.Text = "Versión $Version ($($ultima.Tag) disponible)"
     $lblVersion.ForeColor = [System.Drawing.Color]::DarkOrange
 
-    if (Test-Path (Join-Path $PSScriptRoot '.git')) {
-        Write-Log 'Esta copia es un repositorio git: actualízala con git pull.'
-        return
-    }
+    $esClon = Test-Path (Join-Path $PSScriptRoot '.git')
+    $hayGit = [bool](Get-Command git -ErrorAction SilentlyContinue)
     if ($State.Esperando) {
         Write-Log 'Se puede actualizar desde "Buscar actualizaciones" cuando termine la espera.'
         return
@@ -536,8 +557,15 @@ function Complete-UpdateCheck($Comprobacion) {
 
     $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
     try {
-        Write-Log "Descargando $($ultima.Tag)…"
-        Install-Update $ultima.Tag $PSScriptRoot
+        if ($esClon -and $hayGit) {
+            Write-Log "Actualizando el clon git a $($ultima.Tag)…"
+            Update-GitClone $ultima.Tag $PSScriptRoot
+        } else {
+            # También vale para un clon sin git instalado: los ficheros quedan
+            # como en la etiqueta, aunque git los verá como modificados.
+            Write-Log "Descargando $($ultima.Tag)…"
+            Install-Update $ultima.Tag $PSScriptRoot
+        }
     } catch {
         Write-Log "Error al actualizar: $($_.Exception.Message)"
         Show-Aviso "No se ha podido actualizar:`n$($_.Exception.Message)"
