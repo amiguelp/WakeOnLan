@@ -18,7 +18,7 @@
 
 # Versión del script. Al publicar una nueva, súbela aquí y crea la etiqueta
 # git "v<versión>" (ver README).
-$Version = '1.10.0'
+$Version = '1.11.0'
 $RepoGitHub = 'amiguelp/WakeOnLan'
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -47,7 +47,7 @@ function Read-Config {
         Equipo    = ''
         Mac       = ''
         Usuario   = ''      # cuenta del equipo remoto (RDP y apagado)
-        UsarBroadcast = $true  # $false = WOL solo a la IP del equipo
+        ModoWol   = 'Ambos' # Ambos, IP o Broadcast: a dónde se envía el WOL
         PuertoWol = 9
         PuertoRdp = 3389
         EsperaMax = 180     # segundos
@@ -58,6 +58,8 @@ function Read-Config {
             foreach ($p in $leido.PSObject.Properties) {
                 if ($cfg.Contains($p.Name)) { $cfg[$p.Name] = $p.Value }
             }
+            # Configuración de versiones anteriores (casilla "Usar broadcast").
+            if ($null -eq $leido.ModoWol -and $leido.UsarBroadcast -eq $false) { $cfg.ModoWol = 'IP' }
         } catch {
             [System.Windows.Forms.MessageBox]::Show(
                 "No se ha podido leer config.json:`n$($_.Exception.Message)",
@@ -132,31 +134,35 @@ function Resolve-IPv4([string]$Equipo) {
     }
 }
 
-# Destinos del paquete mágico.
-#  - Sin broadcast: solo la IP del equipo.
-#  - Con broadcast: broadcast de cada red local y 255.255.255.255, y además la IP
-#    del equipo y el broadcast de su red (suponiendo /24). Estos dos últimos
-#    sirven cuando el equipo está en otra red, por ejemplo detrás de otro
-#    router: el broadcast local no llega allí, pero un paquete dirigido sí puede
-#    llegar si el router lo deja pasar o aún recuerda la MAC de esa IP.
-function Get-WolDestinations([string]$Equipo, [bool]$UsarBroadcast = $true) {
-    if (-not $UsarBroadcast) {
-        $ip = Resolve-IPv4 $Equipo
-        if (-not $ip) {
-            throw "Sin broadcast el paquete se envía a la IP del equipo, y '$Equipo' no se puede resolver a una IPv4. Indica el equipo por IP."
-        }
-        return @($ip.ToString())
+# Modos de envío del WOL, en el orden en que aparecen en la lista.
+$ModosWol = [ordered]@{
+    Ambos     = 'IP y broadcast'
+    IP        = 'Solo IP'
+    Broadcast = 'Solo broadcast'
+}
+
+# Destinos del paquete mágico según el modo:
+#  - IP: solo la IP del equipo. Llega aunque esté en otra red mientras el
+#    router que lo entrega recuerde su MAC (unos minutos tras apagarlo).
+#  - Broadcast: broadcast de cada red local, 255.255.255.255 y el broadcast de
+#    la red del equipo (suponiendo /24). Este último solo llega si el router
+#    deja pasar broadcasts dirigidos.
+#  - Ambos: todo lo anterior.
+function Get-WolDestinations([string]$Equipo, [string]$Modo = 'Ambos') {
+    $ip = Resolve-IPv4 $Equipo
+    if ($Modo -eq 'IP' -and -not $ip) {
+        throw "En modo 'Solo IP' el paquete se envía a la IP del equipo, y '$Equipo' no se puede resolver a una IPv4. Indica el equipo por IP."
     }
     $destinos = New-Object System.Collections.Generic.List[string]
-    foreach ($d in Get-BroadcastAddresses) { $destinos.Add($d) }
-
-    $ip = Resolve-IPv4 $Equipo
-    if ($ip) {
-        $b = $ip.GetAddressBytes()
-        $b[3] = 255
-        $destinos.Add((New-Object System.Net.IPAddress (, $b)).ToString())
-        $destinos.Add($ip.ToString())
+    if ($Modo -ne 'IP') {
+        foreach ($d in Get-BroadcastAddresses) { $destinos.Add($d) }
+        if ($ip) {
+            $b = $ip.GetAddressBytes()
+            $b[3] = 255
+            $destinos.Add((New-Object System.Net.IPAddress (, $b)).ToString())
+        }
     }
+    if ($Modo -ne 'Broadcast' -and $ip) { $destinos.Add($ip.ToString()) }
     return $destinos | Select-Object -Unique
 }
 
@@ -365,19 +371,22 @@ $btnClave.Location = New-Object System.Drawing.Point(358, 78)
 $btnClave.Size = New-Object System.Drawing.Size(87, 25)
 $form.Controls.Add($btnClave)
 
-$chkBroadcast = New-Object System.Windows.Forms.CheckBox
-$chkBroadcast.Text = 'Usar broadcast'
-$chkBroadcast.Checked = [bool]$Config.UsarBroadcast
-$chkBroadcast.Location = New-Object System.Drawing.Point(15, 112)
-$chkBroadcast.Size = New-Object System.Drawing.Size(300, 22)
-$form.Controls.Add($chkBroadcast)
+Add-Label 'Enviar WOL a:' 111
+$cmbModo = New-Object System.Windows.Forms.ComboBox
+$cmbModo.DropDownStyle = 'DropDownList'
+foreach ($texto in $ModosWol.Values) { [void]$cmbModo.Items.Add($texto) }
+$indiceModo = @($ModosWol.Keys).IndexOf([string]$Config.ModoWol)
+$cmbModo.SelectedIndex = [Math]::Max(0, $indiceModo)
+$cmbModo.Location = New-Object System.Drawing.Point(150, 111)
+$cmbModo.Size = New-Object System.Drawing.Size(200, 23)
+$form.Controls.Add($cmbModo)
 $ayuda = New-Object System.Windows.Forms.ToolTip
 $ayuda.SetToolTip($txtUsuario,
     "Cuenta del equipo remoto para Escritorio remoto y Apagar.`nCuenta local: usuario.  Cuenta de Microsoft: MicrosoftAccount\correo@ejemplo.com`nVacío: no se gestionan credenciales.")
 $ayuda.SetToolTip($btnClave,
     'Guarda (o cambia) la contraseña en el Administrador de credenciales de Windows.')
-$ayuda.SetToolTip($chkBroadcast,
-    "Marcado: el WOL se envía al broadcast de todas las redes locales, al de la red del equipo y a su IP.`nDesmarcado: solo a la IP del equipo.")
+$ayuda.SetToolTip($cmbModo,
+    "Solo IP: a la IP del equipo.`nSolo broadcast: al broadcast de las redes locales y al de la red del equipo.`nIP y broadcast: a todo.")
 
 Add-Label 'Espera máxima (s):' 143
 $numEspera = New-Object System.Windows.Forms.NumericUpDown
@@ -477,7 +486,7 @@ function Get-FormConfig {
     $Config.Equipo = $txtEquipo.Text.Trim()
     $Config.Mac = $txtMac.Text.Trim()
     $Config.Usuario = $txtUsuario.Text.Trim()
-    $Config.UsarBroadcast = $chkBroadcast.Checked
+    $Config.ModoWol = @($ModosWol.Keys)[$cmbModo.SelectedIndex]
     $Config.EsperaMax = [int]$numEspera.Value
     return $Config
 }
@@ -509,7 +518,7 @@ function Invoke-Wol($cfg, [switch]$Silencioso) {
         return $false
     }
     try {
-        $destinos = @(Get-WolDestinations $cfg.Equipo ([bool]$cfg.UsarBroadcast))
+        $destinos = @(Get-WolDestinations $cfg.Equipo ([string]$cfg.ModoWol))
     } catch {
         Write-Log "Error al enviar WOL: $($_.Exception.Message)"
         if (-not $Silencioso) { Show-Aviso $_.Exception.Message }
