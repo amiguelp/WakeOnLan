@@ -3,7 +3,7 @@
 Script de PowerShell con ventana para encender otro PC por Wake-on-LAN y conectarse a él por Escritorio remoto.
 
 - **Encender (WOL)**: envía el paquete mágico a la MAC configurada.
-- **Conectar (RDP)**: si el equipo responde en el puerto RDP, abre `mstsc`. Si no responde, envía WOL, espera a que arranque (reenviando WOL cada 30 s) y entonces abre `mstsc`. Mientras espera, el botón pasa a **Cancelar espera**.
+- **Conectar (RDP)**: si el equipo responde en el puerto RDP, abre `mstsc`. Si no responde, envía WOL, espera a que arranque (reenviando WOL cada 30 s) y entonces abre `mstsc`. Mientras espera, el botón pasa a **Cancelar espera**. Mientras haya una sesión de Escritorio remoto abierta con el equipo, el botón queda desactivado (**Conectado (RDP)**).
 - **Apagar**: pide confirmación y apaga el equipo con `shutdown /s /f /t 0 /m \\<equipo>`. Los programas abiertos se cierran sin guardar. Ver [Apagado remoto](#apagado-remoto).
 
 El indicador de estado comprueba cada 5 s si el puerto RDP (3389) del equipo responde.
@@ -54,12 +54,12 @@ La etiqueta tiene que coincidir con `$Version`: si la etiqueta es mayor que la v
 
 ### Credenciales
 
-Si hay **Usuario remoto**, al pulsar **Conectar (RDP)** o **Apagar** el script comprueba con `cmdkey` si el Administrador de credenciales de Windows tiene guardada la contraseña de ese equipo. Si no, la pide y la guarda dos veces:
+Si hay **Usuario remoto**, al pulsar **Conectar (RDP)** o **Apagar** el script comprueba (con la API `CredRead` de Windows) si el Administrador de credenciales de Windows tiene guardada la contraseña de ese equipo. Si no, la pide y la guarda dos veces:
 
 - `TERMSRV/<equipo>`: la que usa Escritorio remoto, que ya no pide contraseña.
 - `<equipo>`: la que usa `shutdown /m` para apagarlo.
 
-El botón **Contraseña…** permite cambiarla (por ejemplo, si cambias la contraseña de esa cuenta). La contraseña no se guarda en `config.json`. Para borrarla: `cmdkey /delete:TERMSRV/<equipo>` y `cmdkey /delete:<equipo>`.
+El botón **Contraseña…** permite cambiarla (por ejemplo, si cambias la contraseña de esa cuenta). La contraseña se guarda con `CredWrite`, sin pasar por ninguna línea de órdenes, y no se guarda en `config.json`. Para borrarla: `cmdkey /delete:TERMSRV/<equipo>` y `cmdkey /delete:<equipo>`.
 
 ### Apagado remoto
 

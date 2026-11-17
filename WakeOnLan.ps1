@@ -18,7 +18,7 @@
 
 # Versión del script. Al publicar una nueva, súbela aquí y crea la etiqueta
 # git "v<versión>" (ver README).
-$Version = '1.6.0'
+$Version = '1.7.0'
 $RepoGitHub = 'amiguelp/WakeOnLan'
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -296,6 +296,9 @@ $State = @{
     UltimoWol      = [DateTime]::MinValue
     Comprobacion   = $null      # consulta de actualizaciones en curso
     Apagando       = $null      # proceso shutdown.exe en curso
+    SesionRdp      = $false     # hay una sesión de Escritorio remoto abierta
+    CacheIp        = $null
+    UltimaSesion   = [DateTime]::MinValue
 }
 
 $Config = Read-Config
@@ -506,55 +509,93 @@ function Invoke-Wol($cfg, [switch]$Silencioso) {
 }
 
 # ---------------------------------------------------------------------------
-# Credenciales (Administrador de credenciales de Windows, vía cmdkey)
+# Credenciales (Administrador de credenciales de Windows, API Cred*)
 #   TERMSRV/<equipo>  la usa Escritorio remoto (mstsc).
 #   <equipo>          la usa shutdown /m (conexión SMB/RPC).
+# La contraseña va directamente a CredWrite: no pasa por ninguna línea de
+# órdenes ni por config.json.
 # ---------------------------------------------------------------------------
 
-# Entrecomilla un argumento para la línea de órdenes de Windows.
-function ConvertTo-ArgumentoWindows([string]$Valor) {
-    '"' + ($Valor -replace '(\\*)"', '$1$1\"' -replace '(\\+)$', '$1$1') + '"'
-}
+$CredGeneric = 1          # CRED_TYPE_GENERIC
+$CredDomainPassword = 2   # CRED_TYPE_DOMAIN_PASSWORD
 
-function Invoke-Cmdkey([string]$Argumentos) {
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = "$env:windir\System32\cmdkey.exe"
-    $psi.Arguments = $Argumentos
-    $psi.UseShellExecute = $false
-    $psi.CreateNoWindow = $true
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    $oem = [Text.Encoding]::GetEncoding([Globalization.CultureInfo]::CurrentCulture.TextInfo.OEMCodePage)
-    $psi.StandardOutputEncoding = $oem
-    $psi.StandardErrorEncoding = $oem
-    $p = [System.Diagnostics.Process]::Start($psi)
-    try {
-        $salida = $p.StandardOutput.ReadToEnd() + $p.StandardError.ReadToEnd()
-        $p.WaitForExit()
-        return [pscustomobject]@{ Codigo = $p.ExitCode; Salida = $salida.Trim() }
-    } finally {
-        $p.Dispose()
+# Se compila la primera vez que hace falta, para no retrasar el arranque.
+function Initialize-CredApi {
+    if ('WolCredApi' -as [type]) { return }
+    Add-Type -TypeDefinition @'
+using System;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using FILETIME = System.Runtime.InteropServices.ComTypes.FILETIME;
+
+public static class WolCredApi {
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct CREDENTIAL {
+        public int Flags;
+        public int Type;
+        public string TargetName;
+        public string Comment;
+        public FILETIME LastWritten;
+        public int CredentialBlobSize;
+        public IntPtr CredentialBlob;
+        public int Persist;
+        public int AttributeCount;
+        public IntPtr Attributes;
+        public string TargetAlias;
+        public string UserName;
+    }
+
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true, EntryPoint = "CredReadW")]
+    private static extern bool CredRead(string target, int type, int flags, out IntPtr credential);
+
+    [DllImport("advapi32.dll", CharSet = CharSet.Unicode, SetLastError = true, EntryPoint = "CredWriteW")]
+    private static extern bool CredWrite(ref CREDENTIAL credential, int flags);
+
+    [DllImport("advapi32.dll")]
+    private static extern void CredFree(IntPtr buffer);
+
+    private const int CRED_PERSIST_LOCAL_MACHINE = 2;
+
+    public static bool Exists(string target, int type) {
+        IntPtr p;
+        if (!CredRead(target, type, 0, out p)) return false;
+        CredFree(p);
+        return true;
+    }
+
+    public static void Write(string target, int type, string user, string password) {
+        IntPtr blob = Marshal.StringToCoTaskMemUni(password);
+        try {
+            CREDENTIAL c = new CREDENTIAL();
+            c.Type = type;
+            c.TargetName = target;
+            c.UserName = user;
+            c.CredentialBlob = blob;
+            c.CredentialBlobSize = password.Length * 2;
+            c.Persist = CRED_PERSIST_LOCAL_MACHINE;
+            if (!CredWrite(ref c, 0)) throw new Win32Exception(Marshal.GetLastWin32Error());
+        } finally {
+            Marshal.ZeroFreeCoTaskMemUnicode(blob);
+        }
     }
 }
+'@
+}
 
-# ¿Hay guardada una credencial para ese destino? cmdkey traduce los textos,
-# pero la línea del destino siempre lleva "target=<destino>".
+# ¿Hay guardada una credencial para ese destino? mstsc, si se marca
+# "Recordar credenciales", la guarda como de dominio; cmdkey /generic, como
+# genérica. Vale cualquiera de las dos.
 function Test-Credencial([string]$Destino) {
-    $r = Invoke-Cmdkey "/list:$(ConvertTo-ArgumentoWindows $Destino)"
-    $patron = 'target=' + [regex]::Escape($Destino) + '\s*$'
-    return [bool](($r.Salida -split "`r?`n") | Where-Object { $_ -match $patron })
+    Initialize-CredApi
+    return [WolCredApi]::Exists($Destino, $CredDomainPassword) -or
+        ($Destino -like 'TERMSRV/*' -and [WolCredApi]::Exists($Destino, $CredGeneric))
 }
 
 # Guarda usuario y contraseña para RDP y para el apagado.
 function Save-Credenciales([string]$Equipo, [string]$Usuario, [string]$Clave) {
-    $u = ConvertTo-ArgumentoWindows $Usuario
-    $c = ConvertTo-ArgumentoWindows $Clave
-    foreach ($a in @(
-            "/generic:$(ConvertTo-ArgumentoWindows "TERMSRV/$Equipo") /user:$u /pass:$c",
-            "/add:$(ConvertTo-ArgumentoWindows $Equipo) /user:$u /pass:$c")) {
-        $r = Invoke-Cmdkey $a
-        if ($r.Codigo -ne 0) { throw "cmdkey ha fallado (código $($r.Codigo)): $($r.Salida)" }
-    }
+    Initialize-CredApi
+    [WolCredApi]::Write("TERMSRV/$Equipo", $CredGeneric, $Usuario, $Clave)
+    [WolCredApi]::Write($Equipo, $CredDomainPassword, $Usuario, $Clave)
 }
 
 # Ventana para pedir la contraseña. Devuelve $null si se cancela.
@@ -636,6 +677,42 @@ function Confirm-Credencial($cfg, [string]$Destino) {
     }
     Write-Log "No hay credenciales guardadas para $Destino."
     return (Request-Credenciales $cfg.Equipo $cfg.Usuario)
+}
+
+# IPv4 del equipo con caché de un minuto, para no consultar el DNS cada medio
+# segundo cuando se indica por nombre.
+function Get-IPv4Cacheada([string]$Equipo) {
+    $c = $State.CacheIp
+    if ($c -and $c.Equipo -eq $Equipo -and ([DateTime]::Now - $c.Hora).TotalSeconds -lt 60) { return $c.Ip }
+    $ip = Resolve-IPv4 $Equipo
+    $State.CacheIp = [pscustomobject]@{ Equipo = $Equipo; Ip = $ip; Hora = [DateTime]::Now }
+    return $ip
+}
+
+# ¿Hay una conexión TCP establecida desde este PC al puerto RDP del equipo?
+# Es lo que mantiene abierta una sesión de Escritorio remoto.
+function Test-SesionRdp([string]$Equipo, [int]$Puerto) {
+    if (-not $Equipo) { return $false }
+    $ip = Get-IPv4Cacheada $Equipo
+    if (-not $ip) { return $false }
+    foreach ($c in [System.Net.NetworkInformation.IPGlobalProperties]::GetIPGlobalProperties().GetActiveTcpConnections()) {
+        if ($c.State -eq 'Established' -and $c.RemoteEndPoint.Port -eq $Puerto -and $c.RemoteEndPoint.Address.Equals($ip)) {
+            return $true
+        }
+    }
+    return $false
+}
+
+# Desactiva Conectar (RDP) mientras haya una sesión abierta. Durante la espera
+# el botón es "Cancelar espera" y no se toca.
+function Update-BotonRdp([bool]$Conectado) {
+    if ($State.Esperando) { return }
+    if ($State.SesionRdp -ne $Conectado) {
+        $State.SesionRdp = $Conectado
+        Write-Log $(if ($Conectado) { 'Sesión de Escritorio remoto abierta.' } else { 'Sesión de Escritorio remoto cerrada.' })
+    }
+    $btnRdp.Enabled = -not $Conectado
+    $btnRdp.Text = if ($Conectado) { 'Conectado (RDP)' } else { 'Conectar (RDP)' }
 }
 
 function Start-Rdp($cfg) {
@@ -948,6 +1025,14 @@ $timer.Add_Tick({
             }
             $lblEspera.Text = 'Esperando a que arranque… {0:N0} s de {1} s' -f $transcurrido, $numEspera.Value
         }
+    }
+
+    # Sesión de Escritorio remoto abierta (cada segundo).
+    if (($ahora - $State.UltimaSesion).TotalSeconds -ge 1) {
+        $State.UltimaSesion = $ahora
+        try {
+            Update-BotonRdp (Test-SesionRdp $equipo ([int]$Config.PuertoRdp))
+        } catch { }
     }
 
     # Lanzar una nueva comprobación si toca.
