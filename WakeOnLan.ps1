@@ -18,7 +18,7 @@
 
 # Versión del script. Al publicar una nueva, súbela aquí y crea la etiqueta
 # git "v<versión>" (ver README).
-$Version = '1.9.0'
+$Version = '1.10.0'
 $RepoGitHub = 'amiguelp/WakeOnLan'
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -33,6 +33,8 @@ $IntervaloComprobacion = 5
 $IntervaloComprobacionEsperando = 3
 # Tiempo máximo para que responda el puerto RDP, en milisegundos.
 $TimeoutConexionMs = 2000
+# Puerto por el que shutdown /m habla con el equipo (SMB, tubería InitShutdown).
+$PuertoApagado = 445
 # Cada cuánto se repite el paquete WOL mientras se espera el arranque, en segundos.
 $IntervaloReenvioWol = 30
 
@@ -193,6 +195,17 @@ function Send-WakeOnLan([string]$Mac, [string[]]$Destinos, [int]$Puerto) {
 # Comprobación de estado (asíncrona, para no bloquear la ventana)
 # ---------------------------------------------------------------------------
 
+# Resultado de una comprobación: $null si sigue en curso, $true/$false si ha
+# terminado (y entonces cierra la conexión).
+function Read-Probe($Sonda) {
+    $terminada = $Sonda.Tarea -and $Sonda.Tarea.IsCompleted
+    $caducada = ([DateTime]::Now - $Sonda.Inicio).TotalMilliseconds -gt $TimeoutConexionMs
+    if (-not ($terminada -or $caducada -or $Sonda.Error)) { return $null }
+    $ok = $terminada -and -not $Sonda.Tarea.IsFaulted -and -not $Sonda.Tarea.IsCanceled -and $Sonda.Cliente.Connected
+    try { $Sonda.Cliente.Close() } catch { }
+    return [bool]$ok
+}
+
 function Start-Probe([string]$Equipo, [int]$Puerto) {
     $sonda = [pscustomobject]@{
         Equipo  = $Equipo
@@ -289,6 +302,8 @@ function Update-GitClone([string]$Carpeta) {
 
 $State = @{
     Sonda          = $null
+    SondaApagado   = $null      # comprobación del puerto 445 (apagado remoto)
+    AdmiteApagado  = $null      # $true, $false o $null (desconocido)
     UltimaSonda    = [DateTime]::MinValue
     Encendido      = $null      # $true, $false o $null (desconocido)
     Esperando      = $false
@@ -409,9 +424,10 @@ $btnApagar.Text = 'Apagar'
 $btnApagar.Font = $fuenteBoton
 $btnApagar.Location = New-Object System.Drawing.Point(305, 212)
 $btnApagar.Size = New-Object System.Drawing.Size(140, 45)
+$btnApagar.Enabled = $false     # hasta saber si el equipo admite el apagado
 $form.Controls.Add($btnApagar)
 $ayuda.SetToolTip($btnApagar,
-    "Apaga el equipo con 'shutdown /s /m'. Necesita una cuenta con permisos de administrador en él (ver README).")
+    "Apaga el equipo con 'shutdown /s /m'. Necesita una cuenta con permisos de administrador en él (ver README).`nSolo se activa si el equipo acepta conexiones en el puerto $PuertoApagado.")
 
 $lblEspera = New-Object System.Windows.Forms.Label
 $lblEspera.Location = New-Object System.Drawing.Point(15, 264)
@@ -761,13 +777,30 @@ function Start-Rdp($cfg) {
     Start-Process -FilePath "$env:windir\System32\mstsc.exe" -ArgumentList "/v:$destino"
 }
 
+# Apagar solo está disponible si el equipo acepta conexiones en el puerto que
+# usa shutdown /m, y no hay un apagado ni una espera en curso.
+function Update-BotonApagar {
+    $btnApagar.Enabled = ($State.AdmiteApagado -eq $true) -and -not $State.Apagando -and -not $State.Esperando
+}
+
+function Set-EstadoApagado($Admite) {
+    $anterior = $State.AdmiteApagado
+    $State.AdmiteApagado = $Admite
+    Update-BotonApagar
+    # Avisar solo si responde a RDP pero no al apagado: es un problema de
+    # configuración (firewall), no que esté apagado.
+    if ($Admite -eq $false -and $anterior -ne $false -and $State.Encendido -eq $true) {
+        Write-Log "El equipo no acepta conexiones en el puerto ${PuertoApagado}: no se puede apagar en remoto (revisa en su firewall 'Compartir archivos e impresoras')."
+    }
+}
+
 function Start-Espera {
     $State.Esperando = $true
     $State.InicioEspera = [DateTime]::Now
     $State.UltimaSonda = [DateTime]::MinValue
     $btnRdp.Text = 'Cancelar espera'
     $btnWol.Enabled = $false
-    $btnApagar.Enabled = $false
+    Update-BotonApagar
     $txtEquipo.Enabled = $false
     $lblEspera.Text = 'Esperando a que arranque…'
 }
@@ -776,7 +809,7 @@ function Stop-Espera {
     $State.Esperando = $false
     $btnRdp.Text = 'Conectar (RDP)'
     $btnWol.Enabled = $State.Encendido -ne $true
-    $btnApagar.Enabled = -not $State.Apagando
+    Update-BotonApagar
     $txtEquipo.Enabled = $true
     $lblEspera.Text = ''
 }
@@ -802,13 +835,13 @@ function Start-Apagado([string]$Equipo) {
         Error   = $p.StandardError.ReadToEndAsync()
         Equipo  = $Equipo
     }
-    $btnApagar.Enabled = $false
+    Update-BotonApagar
     $btnApagar.Text = 'Apagando…'
 }
 
 function Complete-Apagado($Apagado) {
     $btnApagar.Text = 'Apagar'
-    $btnApagar.Enabled = -not $State.Esperando
+    Update-BotonApagar
     $codigo = $Apagado.Proceso.ExitCode
     $texto = (($Apagado.Error.Result, $Apagado.Salida.Result) -join ' ').Trim()
     $Apagado.Proceso.Dispose()
@@ -1007,6 +1040,7 @@ $btnDetectar.Add_Click({
 
 $txtEquipo.Add_TextChanged({
     Set-Estado $null
+    Set-EstadoApagado $null
     # Esperar un poco antes de comprobar, mientras se escribe.
     $State.UltimaSonda = [DateTime]::Now.AddSeconds(1 - $IntervaloComprobacion)
 })
@@ -1037,14 +1071,19 @@ $timer.Add_Tick({
     # Recoger el resultado de la comprobación en curso.
     $sonda = $State.Sonda
     if ($sonda) {
-        $terminada = $sonda.Tarea -and $sonda.Tarea.IsCompleted
-        $caducada = ($ahora - $sonda.Inicio).TotalMilliseconds -gt $TimeoutConexionMs
-        if ($terminada -or $caducada -or $sonda.Error) {
-            $ok = $terminada -and -not $sonda.Tarea.IsFaulted -and -not $sonda.Tarea.IsCanceled -and $sonda.Cliente.Connected
-            try { $sonda.Cliente.Close() } catch { }
+        $ok = Read-Probe $sonda
+        if ($null -ne $ok) {
             $State.Sonda = $null
             $State.UltimaSonda = $ahora
-            if ($sonda.Equipo -eq $equipo) { Set-Estado ([bool]$ok) }
+            if ($sonda.Equipo -eq $equipo) { Set-Estado $ok }
+        }
+    }
+    $sonda = $State.SondaApagado
+    if ($sonda) {
+        $ok = Read-Probe $sonda
+        if ($null -ne $ok) {
+            $State.SondaApagado = $null
+            if ($sonda.Equipo -eq $equipo) { Set-EstadoApagado $ok }
         }
     }
 
@@ -1076,10 +1115,11 @@ $timer.Add_Tick({
     }
 
     # Lanzar una nueva comprobación si toca.
-    if (-not $State.Sonda -and $equipo) {
+    if (-not $State.Sonda -and -not $State.SondaApagado -and $equipo) {
         $intervalo = if ($State.Esperando) { $IntervaloComprobacionEsperando } else { $IntervaloComprobacion }
         if (($ahora - $State.UltimaSonda).TotalSeconds -ge $intervalo) {
             $State.Sonda = Start-Probe $equipo ([int]$Config.PuertoRdp)
+            $State.SondaApagado = Start-Probe $equipo $PuertoApagado
         }
     }
 })
