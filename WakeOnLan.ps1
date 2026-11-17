@@ -11,12 +11,21 @@
 
     La configuración (equipo, MAC, broadcast, espera máxima) se guarda en
     config.json, junto al script.
+
+    Al arrancar comprueba si en GitHub hay una etiqueta vX.Y.Z mayor que
+    $Version y, si la hay, ofrece descargarla e instalarla.
 #>
+
+# Versión del script. Al publicar una nueva, súbela aquí y crea la etiqueta
+# git "v<versión>" (ver README).
+$Version = '1.0.0'
+$RepoGitHub = 'amiguelp/WakeOnLan'
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
 
+$ScriptPath = $PSCommandPath
 $ConfigPath = Join-Path $PSScriptRoot 'config.json'
 
 # Cada cuánto se comprueba si el equipo está encendido, en segundos.
@@ -149,6 +158,63 @@ function Start-Probe([string]$Equipo, [int]$Puerto) {
 }
 
 # ---------------------------------------------------------------------------
+# Actualizaciones desde GitHub
+# ---------------------------------------------------------------------------
+
+function New-GitHubClient {
+    # Windows PowerShell 5.1 no activa TLS 1.2 por defecto y GitHub lo exige.
+    [Net.ServicePointManager]::SecurityProtocol =
+        [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    $wc = New-Object System.Net.WebClient
+    $wc.Encoding = [Text.Encoding]::UTF8
+    $wc.Headers['User-Agent'] = 'WakeOnLan-ps1'
+    $wc.Headers['Accept'] = 'application/vnd.github+json'
+    return $wc
+}
+
+# Devuelve la etiqueta vX.Y.Z más alta de la respuesta de /tags, o $null.
+function Get-LatestTag([string]$Json) {
+    $mejor = $null
+    foreach ($t in (ConvertFrom-Json $Json)) {
+        if ($t.name -match '^v?(\d+\.\d+\.\d+)$') {
+            $v = [version]$Matches[1]
+            if (-not $mejor -or $v -gt $mejor.Version) {
+                $mejor = [pscustomobject]@{ Tag = $t.name; Version = $v }
+            }
+        }
+    }
+    return $mejor
+}
+
+# Descarga el código de la etiqueta y sobrescribe los ficheros del script
+# (config.json no está en el repositorio, así que se conserva).
+function Install-Update([string]$Tag, [string]$Destino) {
+    $temp = Join-Path ([IO.Path]::GetTempPath()) ('WakeOnLan-' + [guid]::NewGuid().ToString('N'))
+    $zip = "$temp.zip"
+    try {
+        $wc = New-GitHubClient
+        try {
+            $wc.DownloadFile("https://api.github.com/repos/$RepoGitHub/zipball/$Tag", $zip)
+        } finally {
+            $wc.Dispose()
+        }
+        Expand-Archive -Path $zip -DestinationPath $temp -Force
+        # El zip de GitHub contiene una única carpeta "<usuario>-<repo>-<commit>".
+        $origen = Get-ChildItem $temp -Directory | Select-Object -First 1
+        $nuevo = Join-Path $origen.FullName 'WakeOnLan.ps1'
+        if (-not (Test-Path $nuevo)) { throw 'El paquete descargado no contiene WakeOnLan.ps1.' }
+        $errores = $null
+        [void][System.Management.Automation.Language.Parser]::ParseFile($nuevo, [ref]$null, [ref]$errores)
+        if ($errores.Count) { throw "WakeOnLan.ps1 de $Tag tiene errores: $($errores[0].Message)" }
+        Get-ChildItem $origen.FullName -Force |
+            Where-Object { $_.Name -ne 'config.json' } |
+            Copy-Item -Destination $Destino -Recurse -Force
+    } finally {
+        Remove-Item $zip, $temp -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Interfaz
 # ---------------------------------------------------------------------------
 
@@ -159,16 +225,17 @@ $State = @{
     Esperando      = $false
     InicioEspera   = [DateTime]::MinValue
     UltimoWol      = [DateTime]::MinValue
+    Comprobacion   = $null      # consulta de actualizaciones en curso
 }
 
 $Config = Read-Config
 
 $form = New-Object System.Windows.Forms.Form
-$form.Text = 'Wake-on-LAN + Escritorio remoto'
+$form.Text = "Wake-on-LAN + Escritorio remoto $Version"
 $form.StartPosition = 'CenterScreen'
 $form.FormBorderStyle = 'FixedDialog'
 $form.MaximizeBox = $false
-$form.ClientSize = New-Object System.Drawing.Size(460, 420)
+$form.ClientSize = New-Object System.Drawing.Size(460, 440)
 $form.Font = New-Object System.Drawing.Font('Segoe UI', 9)
 try {
     $form.Icon = [System.Drawing.Icon]::ExtractAssociatedIcon("$env:windir\System32\mstsc.exe")
@@ -267,6 +334,20 @@ $txtLog.Location = New-Object System.Drawing.Point(15, 257)
 $txtLog.Size = New-Object System.Drawing.Size(430, 148)
 $form.Controls.Add($txtLog)
 
+$lblVersion = New-Object System.Windows.Forms.Label
+$lblVersion.Text = "Versión $Version"
+$lblVersion.ForeColor = [System.Drawing.Color]::Gray
+$lblVersion.Location = New-Object System.Drawing.Point(15, 414)
+$lblVersion.Size = New-Object System.Drawing.Size(200, 20)
+$form.Controls.Add($lblVersion)
+
+$lnkActualizar = New-Object System.Windows.Forms.LinkLabel
+$lnkActualizar.Text = 'Buscar actualizaciones'
+$lnkActualizar.TextAlign = 'TopRight'
+$lnkActualizar.Location = New-Object System.Drawing.Point(215, 414)
+$lnkActualizar.Size = New-Object System.Drawing.Size(230, 20)
+$form.Controls.Add($lnkActualizar)
+
 $form.AcceptButton = $btnRdp
 
 # ---------------------------------------------------------------------------
@@ -352,6 +433,79 @@ function Stop-Espera {
     $lblEspera.Text = ''
 }
 
+function Start-UpdateCheck([bool]$Manual) {
+    if ($State.Comprobacion) { return }
+    try {
+        $wc = New-GitHubClient
+        $State.Comprobacion = [pscustomobject]@{
+            Cliente = $wc
+            Tarea   = $wc.DownloadStringTaskAsync("https://api.github.com/repos/$RepoGitHub/tags?per_page=100")
+            Manual  = $Manual
+        }
+        if ($Manual) { $lnkActualizar.Text = 'Buscando…' }
+    } catch {
+        Write-Log "No se han podido buscar actualizaciones: $($_.Exception.Message)"
+    }
+}
+
+function Complete-UpdateCheck($Comprobacion) {
+    $lnkActualizar.Text = 'Buscar actualizaciones'
+    $tarea = $Comprobacion.Tarea
+    if ($tarea.IsFaulted -or $tarea.IsCanceled) {
+        $motivo = if ($tarea.Exception) { $tarea.Exception.GetBaseException().Message } else { 'cancelada' }
+        Write-Log "No se han podido buscar actualizaciones: $motivo"
+        if ($Comprobacion.Manual) { Show-Aviso "No se han podido buscar actualizaciones:`n$motivo" }
+        return
+    }
+
+    $ultima = Get-LatestTag $tarea.Result
+    if (-not $ultima -or $ultima.Version -le [version]$Version) {
+        if ($Comprobacion.Manual) {
+            Write-Log "Tienes la última versión ($Version)."
+            [System.Windows.Forms.MessageBox]::Show($form, "Tienes la última versión ($Version).",
+                'Wake-on-LAN', 'OK', 'Information') | Out-Null
+        }
+        return
+    }
+
+    Write-Log "Hay una versión nueva: $($ultima.Tag) (tienes la $Version)."
+    $lblVersion.Text = "Versión $Version ($($ultima.Tag) disponible)"
+    $lblVersion.ForeColor = [System.Drawing.Color]::DarkOrange
+
+    if (Test-Path (Join-Path $PSScriptRoot '.git')) {
+        Write-Log 'Esta copia es un repositorio git: actualízala con git pull.'
+        return
+    }
+    if ($State.Esperando) {
+        Write-Log 'Se puede actualizar desde "Buscar actualizaciones" cuando termine la espera.'
+        return
+    }
+
+    $respuesta = [System.Windows.Forms.MessageBox]::Show($form,
+        "Hay una versión nueva: $($ultima.Tag). Tienes la $Version.`n`n¿Quieres actualizar ahora? El programa se reiniciará.",
+        'Actualización disponible', 'YesNo', 'Question')
+    if ($respuesta -ne 'Yes') { return }
+
+    $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
+    try {
+        Write-Log "Descargando $($ultima.Tag)…"
+        Install-Update $ultima.Tag $PSScriptRoot
+    } catch {
+        Write-Log "Error al actualizar: $($_.Exception.Message)"
+        Show-Aviso "No se ha podido actualizar:`n$($_.Exception.Message)"
+        return
+    } finally {
+        $form.Cursor = [System.Windows.Forms.Cursors]::Default
+    }
+
+    Write-Log "Actualizado a $($ultima.Tag). Reiniciando…"
+    Start-Process -FilePath 'powershell.exe' -ArgumentList @(
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', "`"$ScriptPath`"")
+    $form.Close()
+}
+
+$lnkActualizar.Add_LinkClicked({ Start-UpdateCheck $true })
+
 $btnWol.Add_Click({
     $cfg = Get-FormConfig
     Save-Config $cfg
@@ -428,6 +582,16 @@ $timer.Add_Tick({
     $equipo = $txtEquipo.Text.Trim()
     $ahora = [DateTime]::Now
 
+    # Resultado de la búsqueda de actualizaciones. Se limpia antes de procesarlo
+    # porque puede abrir un diálogo y el temporizador sigue disparándose debajo.
+    $comp = $State.Comprobacion
+    if ($comp -and $comp.Tarea.IsCompleted) {
+        $State.Comprobacion = $null
+        $comp.Cliente.Dispose()
+        Complete-UpdateCheck $comp
+        if ($form.IsDisposed -or -not $form.Visible) { return }
+    }
+
     # Recoger el resultado de la comprobación en curso.
     $sonda = $State.Sonda
     if ($sonda) {
@@ -474,6 +638,7 @@ $form.Add_Shown({
     Write-Log 'Listo.'
     if (-not $txtEquipo.Text) { $txtEquipo.Focus() } else { $btnRdp.Focus() }
     $timer.Start()
+    Start-UpdateCheck $false
 })
 
 $form.Add_FormClosing({

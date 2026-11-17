@@ -26,6 +26,24 @@ Rellena:
 
 La configuración se guarda en `config.json`, junto al script (no se sube al repositorio). En ese fichero también se pueden cambiar `PuertoWol` (9) y `PuertoRdp` (3389).
 
+## Actualizaciones
+
+Al arrancar, el script consulta las etiquetas `vX.Y.Z` de este repositorio en GitHub. Si hay una mayor que su `$Version`, pregunta si se quiere actualizar: descarga el código de esa etiqueta, sobrescribe los ficheros (conserva `config.json`) y se reinicia. También se puede buscar a mano con el enlace **Buscar actualizaciones**.
+
+Si la carpeta del script es un clon de git (tiene `.git`), solo avisa de que hay versión nueva y no sobrescribe nada: se actualiza con `git pull`.
+
+### Publicar una versión
+
+1. Sube `$Version` al principio de `WakeOnLan.ps1` (por ejemplo `'1.1.0'`).
+2. Haz commit y crea la etiqueta con la misma versión y el prefijo `v`:
+
+   ```bash
+   git tag v1.1.0
+   git push origin main v1.1.0
+   ```
+
+La etiqueta tiene que coincidir con `$Version`: si la etiqueta es mayor que la versión del código que contiene, el script ofrecerá actualizar cada vez que arranque.
+
 ## Requisitos en el PC remoto
 
 - Wake-on-LAN activado en la BIOS/UEFI y en las propiedades de la tarjeta de red (*Activar con Magic Packet*). Conviene desactivar el *Inicio rápido* de Windows, que en algunos equipos impide el WOL desde el apagado.
