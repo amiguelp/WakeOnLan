@@ -18,7 +18,7 @@
 
 # Versión del script. Al publicar una nueva, súbela aquí y crea la etiqueta
 # git "v<versión>" (ver README).
-$Version = '1.0.0'
+$Version = '1.1.0'
 $RepoGitHub = 'amiguelp/WakeOnLan'
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -111,30 +111,76 @@ function Get-BroadcastAddresses {
     return $lista | Select-Object -Unique
 }
 
-function Send-WakeOnLan([string]$Mac, [string]$Broadcast, [int]$Puerto) {
-    $mac = ConvertTo-MacBytes $Mac
+# IPv4 del equipo remoto, o $null si no se puede resolver (con el PC apagado
+# es normal que su nombre no resuelva; por eso es mejor usar la IP).
+function Resolve-IPv4([string]$Equipo) {
+    if ([string]::IsNullOrWhiteSpace($Equipo)) { return $null }
+    $ip = $null
+    if ([System.Net.IPAddress]::TryParse($Equipo.Trim(), [ref]$ip)) {
+        if ($ip.AddressFamily -eq 'InterNetwork') { return $ip }
+        return $null
+    }
+    try {
+        return [System.Net.Dns]::GetHostAddresses($Equipo.Trim()) |
+            Where-Object { $_.AddressFamily -eq 'InterNetwork' } |
+            Select-Object -First 1
+    } catch {
+        return $null
+    }
+}
+
+# Destinos del paquete mágico.
+#  - Broadcast indicado a mano: solo ese.
+#  - Automático: broadcast de cada red local y 255.255.255.255, y además la IP
+#    del equipo y el broadcast de su red (suponiendo /24). Estos dos últimos
+#    sirven cuando el equipo está en otra red, por ejemplo detrás de otro
+#    router: el broadcast local no llega allí, pero un paquete dirigido sí puede
+#    llegar si el router lo deja pasar o aún recuerda la MAC de esa IP.
+function Get-WolDestinations([string]$Equipo, [string]$Broadcast) {
+    if (-not [string]::IsNullOrWhiteSpace($Broadcast)) { return @($Broadcast.Trim()) }
+
+    $destinos = New-Object System.Collections.Generic.List[string]
+    foreach ($d in Get-BroadcastAddresses) { $destinos.Add($d) }
+
+    $ip = Resolve-IPv4 $Equipo
+    if ($ip) {
+        $b = $ip.GetAddressBytes()
+        $b[3] = 255
+        $destinos.Add((New-Object System.Net.IPAddress (, $b)).ToString())
+        $destinos.Add($ip.ToString())
+    }
+    return $destinos | Select-Object -Unique
+}
+
+function Send-WakeOnLan([string]$Mac, [string[]]$Destinos, [int]$Puerto) {
+    # Ojo: no llamar a esta variable $mac, que es el mismo nombre que el parámetro
+    # [string]$Mac y convertiría los bytes en texto.
+    $macBytes = ConvertTo-MacBytes $Mac
     # Paquete mágico: 6 bytes 0xFF seguidos de la MAC repetida 16 veces.
     $paquete = New-Object byte[] 102
     for ($i = 0; $i -lt 6; $i++) { $paquete[$i] = 0xFF }
-    for ($r = 0; $r -lt 16; $r++) { [Array]::Copy($mac, 0, $paquete, 6 + $r * 6, 6) }
+    for ($r = 0; $r -lt 16; $r++) { [Array]::Copy($macBytes, 0, $paquete, 6 + $r * 6, 6) }
 
-    if ([string]::IsNullOrWhiteSpace($Broadcast)) {
-        $destinos = @(Get-BroadcastAddresses)
-    } else {
-        $destinos = @($Broadcast.Trim())
-    }
+    $destinos = @($Destinos)
+    $fallos = New-Object System.Collections.Generic.List[string]
 
     $udp = New-Object System.Net.Sockets.UdpClient
     try {
         $udp.EnableBroadcast = $true
         foreach ($d in $destinos) {
-            $ep = New-Object System.Net.IPEndPoint ([System.Net.IPAddress]::Parse($d)), $Puerto
-            [void]$udp.Send($paquete, $paquete.Length, $ep)
+            # Un destino que falle (por ejemplo sin ruta) no impide enviar a los demás.
+            try {
+                $ep = New-Object System.Net.IPEndPoint ([System.Net.IPAddress]::Parse($d)), $Puerto
+                [void]$udp.Send($paquete, $paquete.Length, $ep)
+            } catch {
+                $fallos.Add("$d ($($_.Exception.GetBaseException().Message))")
+            }
         }
     } finally {
         $udp.Close()
     }
-    return $destinos
+    if ($fallos.Count -eq @($destinos).Count) { throw "No se ha podido enviar a ningún destino: $($fallos -join '; ')" }
+    return $fallos
 }
 
 # ---------------------------------------------------------------------------
@@ -398,9 +444,11 @@ function Invoke-Wol($cfg) {
         return $false
     }
     try {
-        $destinos = Send-WakeOnLan $cfg.Mac $cfg.Broadcast ([int]$cfg.PuertoWol)
+        $destinos = @(Get-WolDestinations $cfg.Equipo $cfg.Broadcast)
+        $fallos = Send-WakeOnLan $cfg.Mac $destinos ([int]$cfg.PuertoWol)
         $State.UltimoWol = [DateTime]::Now
         Write-Log "WOL enviado a $($cfg.Mac) ($($destinos -join ', '))."
+        foreach ($f in $fallos) { Write-Log "  No se ha podido enviar a $f." }
         return $true
     } catch {
         Write-Log "Error al enviar WOL: $($_.Exception.Message)"
