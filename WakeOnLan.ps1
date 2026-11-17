@@ -18,7 +18,7 @@
 
 # Versión del script. Al publicar una nueva, súbela aquí y crea la etiqueta
 # git "v<versión>" (ver README).
-$Version = '1.11.0'
+$Version = '1.12.0'
 $RepoGitHub = 'amiguelp/WakeOnLan'
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -94,28 +94,6 @@ function ConvertTo-MacBytes([string]$Mac) {
     return , $bytes
 }
 
-# Direcciones de broadcast de todas las redes IPv4 activas, más 255.255.255.255.
-# En equipos con varias tarjetas, 255.255.255.255 solo sale por una de ellas,
-# así que se envía también al broadcast de cada subred.
-function Get-BroadcastAddresses {
-    $lista = New-Object System.Collections.Generic.List[string]
-    foreach ($nic in [System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()) {
-        if ($nic.OperationalStatus -ne 'Up' -or $nic.NetworkInterfaceType -eq 'Loopback') { continue }
-        foreach ($ua in $nic.GetIPProperties().UnicastAddresses) {
-            if ($ua.Address.AddressFamily -ne 'InterNetwork' -or -not $ua.IPv4Mask) { continue }
-            $ip = $ua.Address.GetAddressBytes()
-            $mascara = $ua.IPv4Mask.GetAddressBytes()
-            $bc = New-Object byte[] 4
-            for ($i = 0; $i -lt 4; $i++) {
-                $bc[$i] = [byte]($ip[$i] -bor ((-bnot $mascara[$i]) -band 0xFF))
-            }
-            $lista.Add((New-Object System.Net.IPAddress (, $bc)).ToString())
-        }
-    }
-    $lista.Add('255.255.255.255')
-    return $lista | Select-Object -Unique
-}
-
 # IPv4 del equipo remoto, o $null si no se puede resolver (con el PC apagado
 # es normal que su nombre no resuelva; por eso es mejor usar la IP).
 function Resolve-IPv4([string]$Equipo) {
@@ -142,28 +120,25 @@ $ModosWol = [ordered]@{
 }
 
 # Destinos del paquete mágico según el modo:
-#  - IP: solo la IP del equipo. Llega aunque esté en otra red mientras el
-#    router que lo entrega recuerde su MAC (unos minutos tras apagarlo).
-#  - Broadcast: broadcast de cada red local, 255.255.255.255 y el broadcast de
-#    la red del equipo (suponiendo /24). Este último solo llega si el router
-#    deja pasar broadcasts dirigidos.
-#  - Ambos: todo lo anterior.
+#  - IP: la IP del equipo. Llega aunque esté en otra red mientras el router
+#    que lo entrega recuerde su MAC (unos minutos tras apagarlo).
+#  - Broadcast: el broadcast de la red del equipo (suponiendo /24, p. ej.
+#    192.168.1.255). Si está en otra red, solo llega si el router deja pasar
+#    broadcasts dirigidos.
+#  - Ambos: las dos cosas.
 function Get-WolDestinations([string]$Equipo, [string]$Modo = 'Ambos') {
     $ip = Resolve-IPv4 $Equipo
-    if ($Modo -eq 'IP' -and -not $ip) {
-        throw "En modo 'Solo IP' el paquete se envía a la IP del equipo, y '$Equipo' no se puede resolver a una IPv4. Indica el equipo por IP."
+    if (-not $ip) {
+        throw "No se puede resolver '$Equipo' a una IPv4, y hace falta para enviar el WOL. Indica el equipo por IP."
     }
-    $destinos = New-Object System.Collections.Generic.List[string]
+    $destinos = @()
     if ($Modo -ne 'IP') {
-        foreach ($d in Get-BroadcastAddresses) { $destinos.Add($d) }
-        if ($ip) {
-            $b = $ip.GetAddressBytes()
-            $b[3] = 255
-            $destinos.Add((New-Object System.Net.IPAddress (, $b)).ToString())
-        }
+        $b = $ip.GetAddressBytes()
+        $b[3] = 255
+        $destinos += (New-Object System.Net.IPAddress (, $b)).ToString()
     }
-    if ($Modo -ne 'Broadcast' -and $ip) { $destinos.Add($ip.ToString()) }
-    return $destinos | Select-Object -Unique
+    if ($Modo -ne 'Broadcast') { $destinos += $ip.ToString() }
+    return $destinos
 }
 
 function Send-WakeOnLan([string]$Mac, [string[]]$Destinos, [int]$Puerto) {
@@ -386,7 +361,7 @@ $ayuda.SetToolTip($txtUsuario,
 $ayuda.SetToolTip($btnClave,
     'Guarda (o cambia) la contraseña en el Administrador de credenciales de Windows.')
 $ayuda.SetToolTip($cmbModo,
-    "Solo IP: a la IP del equipo.`nSolo broadcast: al broadcast de las redes locales y al de la red del equipo.`nIP y broadcast: a todo.")
+    "Solo IP: a la IP del equipo.`nSolo broadcast: al broadcast de la red del equipo (por ejemplo 192.168.1.255).`nIP y broadcast: a los dos.")
 
 Add-Label 'Espera máxima (s):' 143
 $numEspera = New-Object System.Windows.Forms.NumericUpDown

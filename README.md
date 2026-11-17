@@ -23,7 +23,7 @@ Rellena:
 | Equipo | Nombre o IP del PC remoto. Una IP fija es más fiable: con el PC apagado el nombre puede no resolverse. |
 | Dirección MAC | MAC de la tarjeta de red del PC remoto. Con el PC encendido, el botón **Detectar** la obtiene de la tabla ARP. |
 | Usuario remoto | Cuenta del PC remoto con la que conectar por Escritorio remoto y apagarlo. Cuenta local: `usuario`. Cuenta de Microsoft: `MicrosoftAccount\correo@ejemplo.com`. Vacío: el script no gestiona credenciales (mstsc pide las suyas). |
-| Enviar WOL a | **Solo IP**: a la IP del equipo. **Solo broadcast**: al broadcast de todas las redes locales, a `255.255.255.255` y al broadcast de la red del equipo (suponiendo máscara /24). **IP y broadcast** (por defecto): a todo. |
+| Enviar WOL a | **Solo IP**: a la IP del equipo. **Solo broadcast**: al broadcast de la red del equipo, suponiendo máscara /24 (para 192.168.1.102, `192.168.1.255`). **IP y broadcast** (por defecto): a los dos. En todos los casos el equipo tiene que poder resolverse a una IP; mejor indicarlo por IP. |
 | Espera máxima | Segundos que se espera a que arranque antes de dar el aviso. |
 
 La configuración se guarda en `config.json`, junto al script (no se sube al repositorio). En ese fichero también se pueden cambiar `PuertoWol` (9) y `PuertoRdp` (3389).
@@ -79,7 +79,7 @@ Si falla, el registro muestra el mensaje de `shutdown` (código 5: acceso denega
 
 ### Si el equipo está en otra red
 
-Pasa, por ejemplo, si tu PC está detrás de un mesh en modo router (192.168.68.x) y el equipo a encender está en el router principal (192.168.1.x). El broadcast local no llega a la otra red, así que el script envía además el paquete a la IP del equipo y al broadcast de su red. Que lleguen depende del router que tiene una pata en la red del equipo (en el ejemplo, el mesh, cuyo lado WAN está en 192.168.1.x):
+Pasa, por ejemplo, si tu PC está detrás de un mesh en modo router (192.168.68.x) y el equipo a encender está en el router principal (192.168.1.x). Un broadcast de tu red no llegaría a la otra, por eso el script envía el paquete a la IP del equipo y al broadcast de su red. Que lleguen depende del router que tiene una pata en la red del equipo (en el ejemplo, el mesh, cuyo lado WAN está en 192.168.1.x):
 
 - Al broadcast de su red (`192.168.1.255`), solo si el router deja pasar *broadcasts dirigidos*. La mayoría de routers domésticos no lo hacen.
 - A la IP del equipo, solo mientras el router recuerde su MAC (unos minutos después de apagarlo), o siempre si el router permite fijar la pareja IP–MAC (*ARP estático*).
