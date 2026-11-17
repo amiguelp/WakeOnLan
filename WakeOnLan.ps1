@@ -18,7 +18,7 @@
 
 # Versión del script. Al publicar una nueva, súbela aquí y crea la etiqueta
 # git "v<versión>" (ver README).
-$Version = '1.7.0'
+$Version = '1.7.1'
 $RepoGitHub = 'amiguelp/WakeOnLan'
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -668,9 +668,15 @@ function Request-Credenciales([string]$Equipo, [string]$Usuario) {
 # Si hay usuario configurado y falta la credencial de ese destino, la pide.
 # Devuelve $false solo si el usuario cancela o falla el guardado.
 function Confirm-Credencial($cfg, [string]$Destino) {
-    if (-not $cfg.Usuario) { return $true }
+    if (-not $cfg.Usuario) {
+        Write-Log 'Sin usuario remoto: no se usan credenciales guardadas.'
+        return $true
+    }
     try {
-        if (Test-Credencial $Destino) { return $true }
+        if (Test-Credencial $Destino) {
+            Write-Log "Hay credenciales guardadas para $Destino (si fallan, cámbialas con Contraseña…)."
+            return $true
+        }
     } catch {
         Write-Log "No se han podido consultar las credenciales: $($_.Exception.Message)"
         return $true
