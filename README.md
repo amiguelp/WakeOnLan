@@ -22,8 +22,7 @@ Rellena:
 |---|---|
 | Equipo | Nombre o IP del PC remoto. Una IP fija es más fiable: con el PC apagado el nombre puede no resolverse. |
 | Dirección MAC | MAC de la tarjeta de red del PC remoto. Con el PC encendido, el botón **Detectar** la obtiene de la tabla ARP. |
-| Usar broadcast | Marcado (por defecto): el WOL se envía según el campo Broadcast. Desmarcado: solo a la IP del equipo, sin ningún broadcast. |
-| Broadcast | Vacío (recomendado, automático) = se envía al broadcast de todas las redes locales, a `255.255.255.255`, a la IP del equipo y al broadcast de su red (suponiendo máscara /24). Si pones una dirección concreta, solo se envía a esa. |
+| Usar broadcast | Marcado (por defecto): el WOL se envía al broadcast de todas las redes locales, a `255.255.255.255`, al broadcast de la red del equipo (suponiendo máscara /24) y a su IP. Desmarcado: solo a la IP del equipo, sin ningún broadcast. |
 | Espera máxima | Segundos que se espera a que arranque antes de dar el aviso. |
 
 La configuración se guarda en `config.json`, junto al script (no se sube al repositorio). En ese fichero también se pueden cambiar `PuertoWol` (9) y `PuertoRdp` (3389).
@@ -75,6 +74,6 @@ Pasa, por ejemplo, si tu PC está detrás de un mesh en modo router (192.168.68.
 - Al broadcast de su red (`192.168.1.255`), solo si el router deja pasar *broadcasts dirigidos*. La mayoría de routers domésticos no lo hacen.
 - A la IP del equipo, solo mientras el router recuerde su MAC (unos minutos después de apagarlo), o siempre si el router permite fijar la pareja IP–MAC (*ARP estático*).
 
-Para saber cuál de los dos funciona en tu red, prueba cada uno por separado con el equipo apagado desde hace al menos media hora: con **Usar broadcast** marcado y `192.168.1.255` en Broadcast (solo broadcast dirigido), y con **Usar broadcast** desmarcado (solo la IP).
+Para saber cuál de los dos funciona en tu red, prueba con el equipo apagado desde hace al menos media hora: con **Usar broadcast** marcado (incluye el broadcast dirigido) y con **Usar broadcast** desmarcado (solo la IP).
 
 Si nada de eso funciona, las alternativas son poner el mesh en modo punto de acceso, para que todo quede en la misma red, o tener en la red del equipo un aparato siempre encendido (un ESP32, una Raspberry Pi) que reenvíe el paquete como broadcast. Para todo esto conviene indicar el equipo por **IP**: apagado, su nombre puede no resolverse.
