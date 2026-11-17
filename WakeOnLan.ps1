@@ -18,7 +18,7 @@
 
 # Versión del script. Al publicar una nueva, súbela aquí y crea la etiqueta
 # git "v<versión>" (ver README).
-$Version = '1.5.0'
+$Version = '1.6.0'
 $RepoGitHub = 'amiguelp/WakeOnLan'
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -44,6 +44,7 @@ function Read-Config {
     $cfg = [ordered]@{
         Equipo    = ''
         Mac       = ''
+        Usuario   = ''      # cuenta del equipo remoto (RDP y apagado)
         UsarBroadcast = $true  # $false = WOL solo a la IP del equipo
         PuertoWol = 9
         PuertoRdp = 3389
@@ -304,7 +305,7 @@ $form.Text = "Wake-on-LAN + Escritorio remoto $Version"
 $form.StartPosition = 'CenterScreen'
 $form.FormBorderStyle = 'FixedDialog'
 $form.MaximizeBox = $false
-$form.ClientSize = New-Object System.Drawing.Size(460, 440)
+$form.ClientSize = New-Object System.Drawing.Size(460, 472)
 $form.Font = New-Object System.Drawing.Font('Segoe UI', 9)
 try {
     $form.Icon = [System.Drawing.Icon]::ExtractAssociatedIcon("$env:windir\System32\mstsc.exe")
@@ -338,35 +339,47 @@ $btnDetectar.Location = New-Object System.Drawing.Point(358, 46)
 $btnDetectar.Size = New-Object System.Drawing.Size(87, 25)
 $form.Controls.Add($btnDetectar)
 
+Add-Label 'Usuario remoto:' 79
+$txtUsuario = Add-TextBox $Config.Usuario 79 200
+$btnClave = New-Object System.Windows.Forms.Button
+$btnClave.Text = 'Contraseña…'
+$btnClave.Location = New-Object System.Drawing.Point(358, 78)
+$btnClave.Size = New-Object System.Drawing.Size(87, 25)
+$form.Controls.Add($btnClave)
+
 $chkBroadcast = New-Object System.Windows.Forms.CheckBox
 $chkBroadcast.Text = 'Usar broadcast'
 $chkBroadcast.Checked = [bool]$Config.UsarBroadcast
-$chkBroadcast.Location = New-Object System.Drawing.Point(15, 80)
+$chkBroadcast.Location = New-Object System.Drawing.Point(15, 112)
 $chkBroadcast.Size = New-Object System.Drawing.Size(300, 22)
 $form.Controls.Add($chkBroadcast)
 $ayuda = New-Object System.Windows.Forms.ToolTip
+$ayuda.SetToolTip($txtUsuario,
+    "Cuenta del equipo remoto para Escritorio remoto y Apagar.`nCuenta local: usuario.  Cuenta de Microsoft: MicrosoftAccount\correo@ejemplo.com`nVacío: no se gestionan credenciales.")
+$ayuda.SetToolTip($btnClave,
+    'Guarda (o cambia) la contraseña en el Administrador de credenciales de Windows.')
 $ayuda.SetToolTip($chkBroadcast,
     "Marcado: el WOL se envía al broadcast de todas las redes locales, al de la red del equipo y a su IP.`nDesmarcado: solo a la IP del equipo.")
 
-Add-Label 'Espera máxima (s):' 111
+Add-Label 'Espera máxima (s):' 143
 $numEspera = New-Object System.Windows.Forms.NumericUpDown
 $numEspera.Minimum = 30
 $numEspera.Maximum = 900
 $numEspera.Increment = 30
 $numEspera.Value = [Math]::Min(900, [Math]::Max(30, [int]$Config.EsperaMax))
-$numEspera.Location = New-Object System.Drawing.Point(150, 111)
+$numEspera.Location = New-Object System.Drawing.Point(150, 143)
 $numEspera.Size = New-Object System.Drawing.Size(80, 23)
 $form.Controls.Add($numEspera)
 
 # Indicador de estado
 $pnlLed = New-Object System.Windows.Forms.Panel
-$pnlLed.Location = New-Object System.Drawing.Point(17, 152)
+$pnlLed.Location = New-Object System.Drawing.Point(17, 184)
 $pnlLed.Size = New-Object System.Drawing.Size(14, 14)
 $pnlLed.BackColor = [System.Drawing.Color]::Gray
 $form.Controls.Add($pnlLed)
 
 $lblEstado = New-Object System.Windows.Forms.Label
-$lblEstado.Location = New-Object System.Drawing.Point(38, 149)
+$lblEstado.Location = New-Object System.Drawing.Point(38, 181)
 $lblEstado.Size = New-Object System.Drawing.Size(410, 20)
 $lblEstado.Text = 'Comprobando…'
 $form.Controls.Add($lblEstado)
@@ -377,28 +390,28 @@ $fuenteBoton = New-Object System.Drawing.Font('Segoe UI', 10, [System.Drawing.Fo
 $btnWol = New-Object System.Windows.Forms.Button
 $btnWol.Text = 'Encender (WOL)'
 $btnWol.Font = $fuenteBoton
-$btnWol.Location = New-Object System.Drawing.Point(15, 180)
+$btnWol.Location = New-Object System.Drawing.Point(15, 212)
 $btnWol.Size = New-Object System.Drawing.Size(139, 45)
 $form.Controls.Add($btnWol)
 
 $btnRdp = New-Object System.Windows.Forms.Button
 $btnRdp.Text = 'Conectar (RDP)'
 $btnRdp.Font = $fuenteBoton
-$btnRdp.Location = New-Object System.Drawing.Point(160, 180)
+$btnRdp.Location = New-Object System.Drawing.Point(160, 212)
 $btnRdp.Size = New-Object System.Drawing.Size(139, 45)
 $form.Controls.Add($btnRdp)
 
 $btnApagar = New-Object System.Windows.Forms.Button
 $btnApagar.Text = 'Apagar'
 $btnApagar.Font = $fuenteBoton
-$btnApagar.Location = New-Object System.Drawing.Point(305, 180)
+$btnApagar.Location = New-Object System.Drawing.Point(305, 212)
 $btnApagar.Size = New-Object System.Drawing.Size(140, 45)
 $form.Controls.Add($btnApagar)
 $ayuda.SetToolTip($btnApagar,
     "Apaga el equipo con 'shutdown /s /m'. Necesita una cuenta con permisos de administrador en él (ver README).")
 
 $lblEspera = New-Object System.Windows.Forms.Label
-$lblEspera.Location = New-Object System.Drawing.Point(15, 232)
+$lblEspera.Location = New-Object System.Drawing.Point(15, 264)
 $lblEspera.Size = New-Object System.Drawing.Size(430, 20)
 $lblEspera.ForeColor = [System.Drawing.Color]::DarkOrange
 $form.Controls.Add($lblEspera)
@@ -409,21 +422,21 @@ $txtLog.ReadOnly = $true
 $txtLog.ScrollBars = 'Vertical'
 $txtLog.BackColor = [System.Drawing.SystemColors]::Window
 $txtLog.Font = New-Object System.Drawing.Font('Consolas', 9)
-$txtLog.Location = New-Object System.Drawing.Point(15, 257)
+$txtLog.Location = New-Object System.Drawing.Point(15, 289)
 $txtLog.Size = New-Object System.Drawing.Size(430, 148)
 $form.Controls.Add($txtLog)
 
 $lblVersion = New-Object System.Windows.Forms.Label
 $lblVersion.Text = "Versión $Version"
 $lblVersion.ForeColor = [System.Drawing.Color]::Gray
-$lblVersion.Location = New-Object System.Drawing.Point(15, 414)
+$lblVersion.Location = New-Object System.Drawing.Point(15, 446)
 $lblVersion.Size = New-Object System.Drawing.Size(200, 20)
 $form.Controls.Add($lblVersion)
 
 $lnkActualizar = New-Object System.Windows.Forms.LinkLabel
 $lnkActualizar.Text = 'Buscar actualizaciones'
 $lnkActualizar.TextAlign = 'TopRight'
-$lnkActualizar.Location = New-Object System.Drawing.Point(215, 414)
+$lnkActualizar.Location = New-Object System.Drawing.Point(215, 446)
 $lnkActualizar.Size = New-Object System.Drawing.Size(230, 20)
 $form.Controls.Add($lnkActualizar)
 
@@ -444,6 +457,7 @@ function Show-Aviso([string]$Mensaje) {
 function Get-FormConfig {
     $Config.Equipo = $txtEquipo.Text.Trim()
     $Config.Mac = $txtMac.Text.Trim()
+    $Config.Usuario = $txtUsuario.Text.Trim()
     $Config.UsarBroadcast = $chkBroadcast.Checked
     $Config.EsperaMax = [int]$numEspera.Value
     return $Config
@@ -489,6 +503,139 @@ function Invoke-Wol($cfg, [switch]$Silencioso) {
         Write-Log "Error al enviar WOL: $($_.Exception.Message)"
         return $false
     }
+}
+
+# ---------------------------------------------------------------------------
+# Credenciales (Administrador de credenciales de Windows, vía cmdkey)
+#   TERMSRV/<equipo>  la usa Escritorio remoto (mstsc).
+#   <equipo>          la usa shutdown /m (conexión SMB/RPC).
+# ---------------------------------------------------------------------------
+
+# Entrecomilla un argumento para la línea de órdenes de Windows.
+function ConvertTo-ArgumentoWindows([string]$Valor) {
+    '"' + ($Valor -replace '(\\*)"', '$1$1\"' -replace '(\\+)$', '$1$1') + '"'
+}
+
+function Invoke-Cmdkey([string]$Argumentos) {
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = "$env:windir\System32\cmdkey.exe"
+    $psi.Arguments = $Argumentos
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $oem = [Text.Encoding]::GetEncoding([Globalization.CultureInfo]::CurrentCulture.TextInfo.OEMCodePage)
+    $psi.StandardOutputEncoding = $oem
+    $psi.StandardErrorEncoding = $oem
+    $p = [System.Diagnostics.Process]::Start($psi)
+    try {
+        $salida = $p.StandardOutput.ReadToEnd() + $p.StandardError.ReadToEnd()
+        $p.WaitForExit()
+        return [pscustomobject]@{ Codigo = $p.ExitCode; Salida = $salida.Trim() }
+    } finally {
+        $p.Dispose()
+    }
+}
+
+# ¿Hay guardada una credencial para ese destino? cmdkey traduce los textos,
+# pero la línea del destino siempre lleva "target=<destino>".
+function Test-Credencial([string]$Destino) {
+    $r = Invoke-Cmdkey "/list:$(ConvertTo-ArgumentoWindows $Destino)"
+    $patron = 'target=' + [regex]::Escape($Destino) + '\s*$'
+    return [bool](($r.Salida -split "`r?`n") | Where-Object { $_ -match $patron })
+}
+
+# Guarda usuario y contraseña para RDP y para el apagado.
+function Save-Credenciales([string]$Equipo, [string]$Usuario, [string]$Clave) {
+    $u = ConvertTo-ArgumentoWindows $Usuario
+    $c = ConvertTo-ArgumentoWindows $Clave
+    foreach ($a in @(
+            "/generic:$(ConvertTo-ArgumentoWindows "TERMSRV/$Equipo") /user:$u /pass:$c",
+            "/add:$(ConvertTo-ArgumentoWindows $Equipo) /user:$u /pass:$c")) {
+        $r = Invoke-Cmdkey $a
+        if ($r.Codigo -ne 0) { throw "cmdkey ha fallado (código $($r.Codigo)): $($r.Salida)" }
+    }
+}
+
+# Ventana para pedir la contraseña. Devuelve $null si se cancela.
+function Read-Clave([string]$Equipo, [string]$Usuario) {
+    $f = New-Object System.Windows.Forms.Form
+    $f.Text = 'Contraseña del equipo remoto'
+    $f.StartPosition = 'CenterParent'
+    $f.FormBorderStyle = 'FixedDialog'
+    $f.MaximizeBox = $false
+    $f.MinimizeBox = $false
+    $f.ShowInTaskbar = $false
+    $f.Font = $form.Font
+    $f.ClientSize = New-Object System.Drawing.Size(360, 125)
+
+    $l = New-Object System.Windows.Forms.Label
+    $l.Text = "Contraseña de $Usuario en $Equipo.`nSe guardará en el Administrador de credenciales de Windows."
+    $l.Location = New-Object System.Drawing.Point(12, 10)
+    $l.Size = New-Object System.Drawing.Size(340, 36)
+    $f.Controls.Add($l)
+
+    $t = New-Object System.Windows.Forms.TextBox
+    $t.UseSystemPasswordChar = $true
+    $t.Location = New-Object System.Drawing.Point(12, 52)
+    $t.Size = New-Object System.Drawing.Size(336, 23)
+    $f.Controls.Add($t)
+
+    $ok = New-Object System.Windows.Forms.Button
+    $ok.Text = 'Guardar'
+    $ok.DialogResult = 'OK'
+    $ok.Location = New-Object System.Drawing.Point(192, 88)
+    $ok.Size = New-Object System.Drawing.Size(75, 26)
+    $f.Controls.Add($ok)
+    $cancelar = New-Object System.Windows.Forms.Button
+    $cancelar.Text = 'Cancelar'
+    $cancelar.DialogResult = 'Cancel'
+    $cancelar.Location = New-Object System.Drawing.Point(273, 88)
+    $cancelar.Size = New-Object System.Drawing.Size(75, 26)
+    $f.Controls.Add($cancelar)
+    $f.AcceptButton = $ok
+    $f.CancelButton = $cancelar
+
+    try {
+        if ($f.ShowDialog($form) -ne 'OK') { return $null }
+        return $t.Text
+    } finally {
+        $f.Dispose()
+    }
+}
+
+# Pide la contraseña y guarda las credenciales. Devuelve $true si se guardan.
+function Request-Credenciales([string]$Equipo, [string]$Usuario) {
+    $clave = Read-Clave $Equipo $Usuario
+    if ($null -eq $clave) {
+        Write-Log 'No se han guardado credenciales.'
+        return $false
+    }
+    try {
+        Save-Credenciales $Equipo $Usuario $clave
+        Write-Log "Credenciales de $Usuario guardadas para $Equipo."
+        return $true
+    } catch {
+        Write-Log "Error al guardar las credenciales: $($_.Exception.Message)"
+        Show-Aviso "No se han podido guardar las credenciales:`n$($_.Exception.Message)"
+        return $false
+    } finally {
+        $clave = $null
+    }
+}
+
+# Si hay usuario configurado y falta la credencial de ese destino, la pide.
+# Devuelve $false solo si el usuario cancela o falla el guardado.
+function Confirm-Credencial($cfg, [string]$Destino) {
+    if (-not $cfg.Usuario) { return $true }
+    try {
+        if (Test-Credencial $Destino) { return $true }
+    } catch {
+        Write-Log "No se han podido consultar las credenciales: $($_.Exception.Message)"
+        return $true
+    }
+    Write-Log "No hay credenciales guardadas para $Destino."
+    return (Request-Credenciales $cfg.Equipo $cfg.Usuario)
 }
 
 function Start-Rdp($cfg) {
@@ -556,7 +703,7 @@ function Complete-Apagado($Apagado) {
     }
     Write-Log "No se ha podido apagar $($Apagado.Equipo) (código $codigo): $texto"
     $pista = switch ($codigo) {
-        5       { "Acceso denegado. Tu usuario no es administrador en ese equipo, o es una cuenta local y Windows le quita los permisos en remoto (ver README)." }
+        5       { "Acceso denegado. Comprueba el usuario remoto y su contraseña (botón Contraseña…), que sea administrador en ese equipo y, si es una cuenta local, el valor LocalAccountTokenFilterPolicy (ver README)." }
         53      { "No se encuentra la ruta de red. Comprueba que el equipo está encendido y que su firewall permite 'Compartir archivos e impresoras'." }
         1115    { "Ya había un apagado en curso." }
         default { '' }
@@ -663,7 +810,9 @@ $btnApagar.Add_Click({
         "¿Apagar $equipo ahora?`n`nSe cerrarán sus programas sin guardar los cambios.",
         'Apagar equipo', 'YesNo', 'Warning', 'Button2')
     if ($respuesta -ne 'Yes') { return }
-    Save-Config (Get-FormConfig)
+    $cfg = Get-FormConfig
+    Save-Config $cfg
+    if (-not (Confirm-Credencial $cfg $equipo)) { return }
     try {
         Start-Apagado $equipo
         Write-Log "Apagando $equipo…"
@@ -671,6 +820,16 @@ $btnApagar.Add_Click({
         Write-Log "Error al apagar: $($_.Exception.Message)"
         Show-Aviso "No se ha podido lanzar el apagado:`n$($_.Exception.Message)"
     }
+})
+
+$btnClave.Add_Click({
+    $cfg = Get-FormConfig
+    if (-not $cfg.Equipo -or -not $cfg.Usuario) {
+        Show-Aviso 'Indica el equipo y el usuario remoto.'
+        return
+    }
+    Save-Config $cfg
+    [void](Request-Credenciales $cfg.Equipo $cfg.Usuario)
 })
 
 $btnRdp.Add_Click({
@@ -685,6 +844,7 @@ $btnRdp.Add_Click({
         return
     }
     Save-Config $cfg
+    if (-not (Confirm-Credencial $cfg "TERMSRV/$($cfg.Equipo)")) { return }
 
     if ($State.Encendido -eq $true) {
         Start-Rdp $cfg

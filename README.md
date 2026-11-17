@@ -22,6 +22,7 @@ Rellena:
 |---|---|
 | Equipo | Nombre o IP del PC remoto. Una IP fija es más fiable: con el PC apagado el nombre puede no resolverse. |
 | Dirección MAC | MAC de la tarjeta de red del PC remoto. Con el PC encendido, el botón **Detectar** la obtiene de la tabla ARP. |
+| Usuario remoto | Cuenta del PC remoto con la que conectar por Escritorio remoto y apagarlo. Cuenta local: `usuario`. Cuenta de Microsoft: `MicrosoftAccount\correo@ejemplo.com`. Vacío: el script no gestiona credenciales (mstsc pide las suyas). |
 | Usar broadcast | Marcado (por defecto): el WOL se envía al broadcast de todas las redes locales, a `255.255.255.255`, al broadcast de la red del equipo (suponiendo máscara /24) y a su IP. Desmarcado: solo a la IP del equipo, sin ningún broadcast. |
 | Espera máxima | Segundos que se espera a que arranque antes de dar el aviso. |
 
@@ -51,11 +52,20 @@ La etiqueta tiene que coincidir con `$Version`: si la etiqueta es mayor que la v
 - Escritorio remoto habilitado (Windows Pro o superior) y el puerto 3389 permitido en el firewall.
 - WOL está pensado para la misma red local: el paquete de broadcast no atraviesa routers.
 
+### Credenciales
+
+Si hay **Usuario remoto**, al pulsar **Conectar (RDP)** o **Apagar** el script comprueba con `cmdkey` si el Administrador de credenciales de Windows tiene guardada la contraseña de ese equipo. Si no, la pide y la guarda dos veces:
+
+- `TERMSRV/<equipo>`: la que usa Escritorio remoto, que ya no pide contraseña.
+- `<equipo>`: la que usa `shutdown /m` para apagarlo.
+
+El botón **Contraseña…** permite cambiarla (por ejemplo, si cambias la contraseña de esa cuenta). La contraseña no se guarda en `config.json`. Para borrarla: `cmdkey /delete:TERMSRV/<equipo>` y `cmdkey /delete:<equipo>`.
+
 ### Apagado remoto
 
 `shutdown /m` necesita que el equipo remoto acepte la orden:
 
-- Tu usuario tiene que ser **administrador** en el equipo remoto. Lo más sencillo es usar en los dos PC la misma cuenta (o una cuenta local con el mismo nombre y contraseña). Si son distintas, conéctate una vez con `net use \\192.168.1.102\IPC$ /user:EQUIPO\usuario` antes de pulsar **Apagar**.
+- El **Usuario remoto** tiene que ser **administrador** en el equipo remoto (ver [Credenciales](#credenciales)).
 - Con **cuentas locales** (no de Microsoft ni de dominio), Windows quita los permisos de administrador a las conexiones remotas. En el equipo remoto, en PowerShell como administrador:
 
   ```powershell
