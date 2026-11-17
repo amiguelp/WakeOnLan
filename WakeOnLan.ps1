@@ -18,7 +18,7 @@
 
 # Versión del script. Al publicar una nueva, súbela aquí y crea la etiqueta
 # git "v<versión>" (ver README).
-$Version = '1.8.0'
+$Version = '1.9.0'
 $RepoGitHub = 'amiguelp/WakeOnLan'
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -469,6 +469,9 @@ function Get-FormConfig {
 function Set-Estado($Encendido) {
     $anterior = $State.Encendido
     $State.Encendido = $Encendido
+    # Encender no tiene sentido con el equipo encendido; durante la espera ya
+    # está desactivado.
+    if (-not $State.Esperando) { $btnWol.Enabled = $Encendido -ne $true }
     if ($null -eq $Encendido) {
         $pnlLed.BackColor = [System.Drawing.Color]::Gray
         $lblEstado.Text = 'Comprobando…'
@@ -772,7 +775,7 @@ function Start-Espera {
 function Stop-Espera {
     $State.Esperando = $false
     $btnRdp.Text = 'Conectar (RDP)'
-    $btnWol.Enabled = $true
+    $btnWol.Enabled = $State.Encendido -ne $true
     $btnApagar.Enabled = -not $State.Apagando
     $txtEquipo.Enabled = $true
     $lblEspera.Text = ''
