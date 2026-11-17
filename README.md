@@ -30,7 +30,7 @@ La configuración se guarda en `config.json`, junto al script (no se sube al rep
 
 Al arrancar, el script consulta las etiquetas `vX.Y.Z` de este repositorio en GitHub. Si hay una mayor que su `$Version`, pregunta si se quiere actualizar: descarga el código de esa etiqueta, sobrescribe los ficheros (conserva `config.json`) y se reinicia. También se puede buscar a mano con el enlace **Buscar actualizaciones**.
 
-Si la carpeta del script es un clon de git (tiene `.git`), solo avisa de que hay versión nueva y no sobrescribe nada: se actualiza con `git pull`.
+Si la carpeta del script es un clon de git (tiene `.git`), en lugar de sobrescribir los ficheros actualiza con `git pull --ff-only`. Necesita `git.exe` en el PATH y no actualiza si hay cambios sin confirmar en ficheros del repositorio, para no pisarlos.
 
 ### Publicar una versión
 

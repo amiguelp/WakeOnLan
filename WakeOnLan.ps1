@@ -18,7 +18,7 @@
 
 # Versión del script. Al publicar una nueva, súbela aquí y crea la etiqueta
 # git "v<versión>" (ver README).
-$Version = '1.1.0'
+$Version = '1.2.0'
 $RepoGitHub = 'amiguelp/WakeOnLan'
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -258,6 +258,23 @@ function Install-Update([string]$Tag, [string]$Destino) {
     } finally {
         Remove-Item $zip, $temp -Recurse -Force -ErrorAction SilentlyContinue
     }
+}
+
+# Actualiza una copia que es un clon de git con "git pull --ff-only".
+# Se niega si hay cambios locales, para no pisar nada.
+function Update-GitClone([string]$Carpeta) {
+    $git = Get-Command git.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $git) { throw 'Esta copia es un repositorio git, pero no se encuentra git.exe en el PATH.' }
+    $env:GIT_TERMINAL_PROMPT = '0'   # que no se quede esperando credenciales
+
+    $cambios = & $git.Source -C $Carpeta status --porcelain --untracked-files=no 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "git status ha fallado:`n$($cambios -join "`n")" }
+    if ($cambios) {
+        throw "Hay cambios sin confirmar en la carpeta. Guárdalos o descártalos y actualiza con git pull:`n$($cambios -join "`n")"
+    }
+
+    $salida = & $git.Source -C $Carpeta pull --ff-only 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "git pull ha fallado:`n$($salida -join "`n")" }
 }
 
 # ---------------------------------------------------------------------------
@@ -520,24 +537,29 @@ function Complete-UpdateCheck($Comprobacion) {
     $lblVersion.Text = "Versión $Version ($($ultima.Tag) disponible)"
     $lblVersion.ForeColor = [System.Drawing.Color]::DarkOrange
 
-    if (Test-Path (Join-Path $PSScriptRoot '.git')) {
-        Write-Log 'Esta copia es un repositorio git: actualízala con git pull.'
-        return
-    }
     if ($State.Esperando) {
         Write-Log 'Se puede actualizar desde "Buscar actualizaciones" cuando termine la espera.'
         return
     }
 
+    # Una copia que es un clon de git se actualiza con git pull, para no dejar
+    # los ficheros modificados respecto al repositorio.
+    $esGit = Test-Path (Join-Path $PSScriptRoot '.git')
+    $como = if ($esGit) { "`n`nEsta copia es un clon de git: se actualizará con git pull." } else { '' }
     $respuesta = [System.Windows.Forms.MessageBox]::Show($form,
-        "Hay una versión nueva: $($ultima.Tag). Tienes la $Version.`n`n¿Quieres actualizar ahora? El programa se reiniciará.",
+        "Hay una versión nueva: $($ultima.Tag). Tienes la $Version.$como`n`n¿Quieres actualizar ahora? El programa se reiniciará.",
         'Actualización disponible', 'YesNo', 'Question')
     if ($respuesta -ne 'Yes') { return }
 
     $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
     try {
-        Write-Log "Descargando $($ultima.Tag)…"
-        Install-Update $ultima.Tag $PSScriptRoot
+        if ($esGit) {
+            Write-Log 'Actualizando con git pull…'
+            Update-GitClone $PSScriptRoot
+        } else {
+            Write-Log "Descargando $($ultima.Tag)…"
+            Install-Update $ultima.Tag $PSScriptRoot
+        }
     } catch {
         Write-Log "Error al actualizar: $($_.Exception.Message)"
         Show-Aviso "No se ha podido actualizar:`n$($_.Exception.Message)"
