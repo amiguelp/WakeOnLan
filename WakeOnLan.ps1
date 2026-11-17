@@ -18,7 +18,7 @@
 
 # Versión del script. Al publicar una nueva, súbela aquí y crea la etiqueta
 # git "v<versión>" (ver README).
-$Version = '1.7.1'
+$Version = '1.8.0'
 $RepoGitHub = 'amiguelp/WakeOnLan'
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -721,6 +721,36 @@ function Update-BotonRdp([bool]$Conectado) {
     $btnRdp.Text = if ($Conectado) { 'Conectado (RDP)' } else { 'Conectar (RDP)' }
 }
 
+# Cierra los clientes de Escritorio remoto conectados al equipo, para que al
+# apagarlo no salga el aviso de conexión perdida. Se busca qué proceso tiene
+# la conexión TCP al puerto RDP y solo se cierra si es mstsc (o msrdc, el de
+# la aplicación Windows App / Escritorio remoto de la tienda).
+function Close-SesionesRdp([string]$Equipo, [int]$Puerto) {
+    $ip = Resolve-IPv4 $Equipo
+    if (-not $ip) { return }
+    try {
+        $pids = Get-NetTCPConnection -RemoteAddress $ip.ToString() -RemotePort $Puerto -State Established -ErrorAction Stop |
+            Select-Object -ExpandProperty OwningProcess -Unique
+    } catch {
+        return      # sin conexiones (o sin el módulo NetTCPIP): nada que cerrar
+    }
+    foreach ($id in $pids) {
+        $p = Get-Process -Id $id -ErrorAction SilentlyContinue
+        if (-not $p -or $p.ProcessName -notin @('mstsc', 'msrdc')) { continue }
+        try {
+            # Cerrar la ventana de mstsc pregunta "¿Desconectar?"; se termina
+            # el proceso, que equivale a desconectar la sesión.
+            $p.Kill()
+            [void]$p.WaitForExit(3000)
+            Write-Log "Sesión de Escritorio remoto cerrada antes de apagar ($($p.ProcessName), PID $id)."
+        } catch {
+            Write-Log "No se ha podido cerrar el Escritorio remoto (PID $id): $($_.Exception.Message)"
+        } finally {
+            $p.Dispose()
+        }
+    }
+}
+
 function Start-Rdp($cfg) {
     $destino = $cfg.Equipo
     if ([int]$cfg.PuertoRdp -ne 3389) { $destino = '{0}:{1}' -f $cfg.Equipo, $cfg.PuertoRdp }
@@ -890,12 +920,13 @@ $btnApagar.Add_Click({
         return
     }
     $respuesta = [System.Windows.Forms.MessageBox]::Show($form,
-        "¿Apagar $equipo ahora?`n`nSe cerrarán sus programas sin guardar los cambios.",
+        "¿Apagar $equipo ahora?`n`nSe cerrarán sus programas sin guardar los cambios, y también la sesión de Escritorio remoto si está abierta.",
         'Apagar equipo', 'YesNo', 'Warning', 'Button2')
     if ($respuesta -ne 'Yes') { return }
     $cfg = Get-FormConfig
     Save-Config $cfg
     if (-not (Confirm-Credencial $cfg $equipo)) { return }
+    Close-SesionesRdp $equipo ([int]$cfg.PuertoRdp)
     try {
         Start-Apagado $equipo
         Write-Log "Apagando $equipo…"

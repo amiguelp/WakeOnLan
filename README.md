@@ -4,7 +4,7 @@ Script de PowerShell con ventana para encender otro PC por Wake-on-LAN y conecta
 
 - **Encender (WOL)**: envía el paquete mágico a la MAC configurada.
 - **Conectar (RDP)**: si el equipo responde en el puerto RDP, abre `mstsc`. Si no responde, envía WOL, espera a que arranque (reenviando WOL cada 30 s) y entonces abre `mstsc`. Mientras espera, el botón pasa a **Cancelar espera**. Mientras haya una sesión de Escritorio remoto abierta con el equipo, el botón queda desactivado (**Conectado (RDP)**).
-- **Apagar**: pide confirmación y apaga el equipo con `shutdown /s /f /t 0 /m \\<equipo>`. Los programas abiertos se cierran sin guardar. Ver [Apagado remoto](#apagado-remoto).
+- **Apagar**: pide confirmación y apaga el equipo con `shutdown /s /f /t 0 /m \\<equipo>`. Los programas abiertos se cierran sin guardar. Si hay una sesión de Escritorio remoto abierta con ese equipo, la cierra antes, para que no salga el aviso de conexión perdida. Ver [Apagado remoto](#apagado-remoto).
 
 El indicador de estado comprueba cada 5 s si el puerto RDP (3389) del equipo responde.
 
