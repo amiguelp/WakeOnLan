@@ -18,7 +18,7 @@
 
 # Versión del script. Al publicar una nueva, súbela aquí y crea la etiqueta
 # git "v<versión>" (ver README).
-$Version = '1.2.0'
+$Version = '1.3.0'
 $RepoGitHub = 'amiguelp/WakeOnLan'
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -45,6 +45,7 @@ function Read-Config {
         Equipo    = ''
         Mac       = ''
         Broadcast = ''      # vacío = automático (todas las redes locales)
+        UsarBroadcast = $true  # $false = WOL solo a la IP del equipo
         PuertoWol = 9
         PuertoRdp = 3389
         EsperaMax = 180     # segundos
@@ -130,13 +131,21 @@ function Resolve-IPv4([string]$Equipo) {
 }
 
 # Destinos del paquete mágico.
+#  - Sin broadcast: solo la IP del equipo.
 #  - Broadcast indicado a mano: solo ese.
 #  - Automático: broadcast de cada red local y 255.255.255.255, y además la IP
 #    del equipo y el broadcast de su red (suponiendo /24). Estos dos últimos
 #    sirven cuando el equipo está en otra red, por ejemplo detrás de otro
 #    router: el broadcast local no llega allí, pero un paquete dirigido sí puede
 #    llegar si el router lo deja pasar o aún recuerda la MAC de esa IP.
-function Get-WolDestinations([string]$Equipo, [string]$Broadcast) {
+function Get-WolDestinations([string]$Equipo, [string]$Broadcast, [bool]$UsarBroadcast = $true) {
+    if (-not $UsarBroadcast) {
+        $ip = Resolve-IPv4 $Equipo
+        if (-not $ip) {
+            throw "Sin broadcast el paquete se envía a la IP del equipo, y '$Equipo' no se puede resolver a una IPv4. Indica el equipo por IP."
+        }
+        return @($ip.ToString())
+    }
     if (-not [string]::IsNullOrWhiteSpace($Broadcast)) { return @($Broadcast.Trim()) }
 
     $destinos = New-Object System.Collections.Generic.List[string]
@@ -332,13 +341,23 @@ $btnDetectar.Location = New-Object System.Drawing.Point(358, 46)
 $btnDetectar.Size = New-Object System.Drawing.Size(87, 25)
 $form.Controls.Add($btnDetectar)
 
-Add-Label 'Broadcast:' 79
+$chkBroadcast = New-Object System.Windows.Forms.CheckBox
+$chkBroadcast.Text = 'Usar broadcast:'
+$chkBroadcast.Checked = [bool]$Config.UsarBroadcast
+$chkBroadcast.Location = New-Object System.Drawing.Point(15, 80)
+$chkBroadcast.Size = New-Object System.Drawing.Size(135, 22)
+$form.Controls.Add($chkBroadcast)
 $txtBroadcast = Add-TextBox $Config.Broadcast 79 200
+$txtBroadcast.Enabled = $chkBroadcast.Checked
+$ayuda = New-Object System.Windows.Forms.ToolTip
+$ayuda.SetToolTip($chkBroadcast,
+    "Marcado: el WOL se envía por broadcast (y también a la IP del equipo si el campo está vacío).`nDesmarcado: solo a la IP del equipo.")
 $lblBcAyuda = New-Object System.Windows.Forms.Label
 $lblBcAyuda.Text = 'vacío = automático'
 $lblBcAyuda.ForeColor = [System.Drawing.Color]::Gray
 $lblBcAyuda.Location = New-Object System.Drawing.Point(355, 82)
 $lblBcAyuda.Size = New-Object System.Drawing.Size(100, 20)
+$lblBcAyuda.Enabled = $chkBroadcast.Checked
 $form.Controls.Add($lblBcAyuda)
 
 Add-Label 'Espera máxima (s):' 111
@@ -429,6 +448,7 @@ function Get-FormConfig {
     $Config.Equipo = $txtEquipo.Text.Trim()
     $Config.Mac = $txtMac.Text.Trim()
     $Config.Broadcast = $txtBroadcast.Text.Trim()
+    $Config.UsarBroadcast = $chkBroadcast.Checked
     $Config.EsperaMax = [int]$numEspera.Value
     return $Config
 }
@@ -451,17 +471,23 @@ function Set-Estado($Encendido) {
     }
 }
 
-function Invoke-Wol($cfg) {
+function Invoke-Wol($cfg, [switch]$Silencioso) {
     if (-not (Test-Mac $cfg.Mac)) {
         Show-Aviso 'Indica una dirección MAC válida (por ejemplo 00-11-22-33-44-55).'
         return $false
     }
-    if ($cfg.Broadcast -and -not [System.Net.IPAddress]::TryParse($cfg.Broadcast, [ref]$null)) {
+    if ($cfg.UsarBroadcast -and $cfg.Broadcast -and -not [System.Net.IPAddress]::TryParse($cfg.Broadcast, [ref]$null)) {
         Show-Aviso "La dirección de broadcast '$($cfg.Broadcast)' no es una IP válida."
         return $false
     }
     try {
-        $destinos = @(Get-WolDestinations $cfg.Equipo $cfg.Broadcast)
+        $destinos = @(Get-WolDestinations $cfg.Equipo $cfg.Broadcast ([bool]$cfg.UsarBroadcast))
+    } catch {
+        Write-Log "Error al enviar WOL: $($_.Exception.Message)"
+        if (-not $Silencioso) { Show-Aviso $_.Exception.Message }
+        return $false
+    }
+    try {
         $fallos = Send-WakeOnLan $cfg.Mac $destinos ([int]$cfg.PuertoWol)
         $State.UltimoWol = [DateTime]::Now
         Write-Log "WOL enviado a $($cfg.Mac) ($($destinos -join ', '))."
@@ -576,6 +602,11 @@ function Complete-UpdateCheck($Comprobacion) {
 
 $lnkActualizar.Add_LinkClicked({ Start-UpdateCheck $true })
 
+$chkBroadcast.Add_CheckedChanged({
+    $txtBroadcast.Enabled = $chkBroadcast.Checked
+    $lblBcAyuda.Enabled = $chkBroadcast.Checked
+})
+
 $btnWol.Add_Click({
     $cfg = Get-FormConfig
     Save-Config $cfg
@@ -689,7 +720,7 @@ $timer.Add_Tick({
             Show-Aviso ("El equipo no ha respondido en {0} s.`n`nComprueba que Wake-on-LAN está activado en la BIOS y en la tarjeta de red, y que Escritorio remoto está habilitado." -f $numEspera.Value)
         } else {
             if (($ahora - $State.UltimoWol).TotalSeconds -ge $IntervaloReenvioWol) {
-                [void](Invoke-Wol (Get-FormConfig))
+                [void](Invoke-Wol (Get-FormConfig) -Silencioso)
             }
             $lblEspera.Text = 'Esperando a que arranque… {0:N0} s de {1} s' -f $transcurrido, $numEspera.Value
         }
