@@ -1,14 +1,13 @@
 ﻿<#
 .SYNOPSIS
-    Crea en el escritorio y en el menú Inicio un acceso directo "Wake-on-LAN"
-    que abre WakeOnLan.ps1 sin ninguna ventana de consola.
+    Crea en el escritorio un acceso directo "Wake-on-LAN" que abre
+    WakeOnLan.ps1 sin ninguna ventana de consola.
 
 .DESCRIPTION
     El acceso directo ejecuta "conhost.exe --headless powershell.exe ...".
     Con conhost en modo headless no se crea ventana, ni siquiera en Windows 11
     con Windows Terminal como terminal predeterminado (donde -WindowStyle
-    Hidden no oculta la ventana). Desde el menú Inicio se puede anclar a Inicio
-    o a la barra de tareas.
+    Hidden no oculta la ventana).
 #>
 
 $script = Join-Path $PSScriptRoot 'WakeOnLan.ps1'
@@ -18,11 +17,7 @@ if (-not (Test-Path $script)) {
 }
 
 $shell = New-Object -ComObject WScript.Shell
-$destinos = @(
-    [Environment]::GetFolderPath('Desktop'),
-    [Environment]::GetFolderPath('Programs')     # menú Inicio
-)
-foreach ($carpeta in $destinos) {
+foreach ($carpeta in @([Environment]::GetFolderPath('Desktop'))) {
     $ruta = Join-Path $carpeta 'Wake-on-LAN.lnk'
     $lnk = $shell.CreateShortcut($ruta)
     $lnk.TargetPath = "$env:windir\System32\conhost.exe"
