@@ -18,7 +18,7 @@
 
 # Versión del script. Al publicar una nueva, súbela aquí y crea la etiqueta
 # git "v<versión>" (ver README).
-$Version = '1.13.1'
+$Version = '1.14.0'
 $RepoGitHub = 'amiguelp/WakeOnLan'
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -307,7 +307,10 @@ $form.MaximizeBox = $false
 $form.ClientSize = New-Object System.Drawing.Size(460, 472)
 $form.Font = New-Object System.Drawing.Font('Segoe UI', 9)
 try {
-    $form.Icon = [System.Drawing.Icon]::ExtractAssociatedIcon("$env:windir\System32\mstsc.exe")
+    $icono = Join-Path $PSScriptRoot 'WakeOnLan.ico'
+    $form.Icon = if (Test-Path $icono) { New-Object System.Drawing.Icon $icono } else {
+        [System.Drawing.Icon]::ExtractAssociatedIcon("$env:windir\System32\mstsc.exe")
+    }
 } catch { }
 
 function Add-Label([string]$Texto, [int]$Y) {

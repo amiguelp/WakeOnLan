@@ -23,7 +23,7 @@ foreach ($carpeta in @([Environment]::GetFolderPath('Desktop'))) {
     $lnk.TargetPath = "$env:windir\System32\conhost.exe"
     $lnk.Arguments = "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$script`""
     $lnk.WorkingDirectory = $PSScriptRoot
-    $lnk.IconLocation = "$env:windir\System32\mstsc.exe,0"
+    $lnk.IconLocation = "$(Join-Path $PSScriptRoot 'WakeOnLan.ico'),0"
     $lnk.Description = 'Encender por Wake-on-LAN y conectar por Escritorio remoto'
     $lnk.Save()
     Write-Host "Creado: $ruta"

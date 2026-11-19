@@ -12,7 +12,7 @@ El indicador de estado comprueba cada 5 s si el puerto RDP (3389) del equipo res
 
 Haz doble clic en `WakeOnLan.cmd`. Lo abre con `conhost --headless`, sin ventana de consola: en Windows 11, con Windows Terminal como terminal predeterminado, `-WindowStyle Hidden` no basta para ocultarla.
 
-Para no ver ni siquiera el destello de la ventana de `WakeOnLan.cmd`, ejecuta una vez `CrearAccesoDirecto.cmd`: crea en el escritorio un acceso directo **Wake-on-LAN** que abre el script directamente sin consola. Si mueves la carpeta del script, vuelve a ejecutarlo.
+Para no ver ni siquiera el destello de la ventana de `WakeOnLan.cmd`, ejecuta una vez `CrearAccesoDirecto.cmd`: crea en el escritorio un acceso directo **Wake-on-LAN**, con el icono `WakeOnLan.ico`, que abre el script directamente sin consola. Si mueves la carpeta del script, vuelve a ejecutarlo.
 
 También se puede ejecutar a mano:
 
