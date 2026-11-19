@@ -1,0 +1,37 @@
+# Crea la etiqueta v<versión> cuando llega a main un WakeOnLan.ps1 con una
+# $Version que aún no tiene etiqueta. El script ofrece actualizar a partir de
+# esas etiquetas, así que basta con subir $Version y hacer push a main.
+name: Etiquetar versión
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - WakeOnLan.ps1
+      - .github/workflows/etiquetar-version.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  etiquetar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Crear la etiqueta si no existe
+        run: |
+          version=$(grep -m1 -oP "^\\\$Version = '\K[0-9]+\.[0-9]+\.[0-9]+(?=')" WakeOnLan.ps1 || true)
+          if [ -z "$version" ]; then
+            echo "::error::No se encuentra \$Version en WakeOnLan.ps1"
+            exit 1
+          fi
+          etiqueta="v$version"
+          if git ls-remote --exit-code --tags origin "refs/tags/$etiqueta" > /dev/null; then
+            echo "La etiqueta $etiqueta ya existe; no se hace nada."
+            exit 0
+          fi
+          git tag "$etiqueta"
+          git push origin "$etiqueta"
+          echo "Creada la etiqueta $etiqueta."

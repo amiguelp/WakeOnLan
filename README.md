@@ -40,13 +40,15 @@ Si la carpeta del script es un clon de git (tiene `.git`), en lugar de sobrescri
 
 ### Publicar una versión
 
-1. Sube `$Version` al principio de `WakeOnLan.ps1` (por ejemplo `'1.1.0'`).
-2. Haz commit y crea la etiqueta con la misma versión y el prefijo `v`:
+1. Sube `$Version` al principio de `WakeOnLan.ps1` (por ejemplo `'1.16.0'`).
+2. Haz commit y push a `main`.
 
-   ```bash
-   git tag v1.1.0
-   git push origin main v1.1.0
-   ```
+El workflow `.github/workflows/etiquetar-version.yml` crea entonces la etiqueta `v1.16.0` (si no existe) y las copias del script ofrecen la actualización. También se puede lanzar a mano desde la pestaña **Actions** de GitHub. Si prefieres crearla tú:
+
+```bash
+git tag v1.16.0
+git push origin v1.16.0
+```
 
 La etiqueta tiene que coincidir con `$Version`: si la etiqueta es mayor que la versión del código que contiene, el script la instala, ve que la versión no ha cambiado, avisa y ya no la vuelve a ofrecer (lo guarda en `config.json` como `EtiquetaIgnorada`).
 
