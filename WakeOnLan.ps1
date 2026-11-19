@@ -18,7 +18,7 @@
 
 # Versión del script. Al publicar una nueva, súbela aquí y crea la etiqueta
 # git "v<versión>" (ver README).
-$Version = '1.14.0'
+$Version = '1.15.0'
 $RepoGitHub = 'amiguelp/WakeOnLan'
 
 Add-Type -AssemblyName System.Windows.Forms
@@ -51,6 +51,7 @@ function Read-Config {
         PuertoWol = 9
         PuertoRdp = 3389
         EsperaMax = 180     # segundos
+        EtiquetaIgnorada = ''  # etiqueta que no contenía una versión nueva
     }
     if (Test-Path $ConfigPath) {
         try {
@@ -874,6 +875,12 @@ function Complete-UpdateCheck($Comprobacion) {
     }
 
     $ultima = Get-LatestTag $tarea.Result
+    # Una etiqueta que ya se instaló y no subió la versión (etiqueta puesta en
+    # un commit con $Version más baja) no se vuelve a ofrecer.
+    if ($ultima -and $ultima.Tag -eq $Config.EtiquetaIgnorada) {
+        if ($Comprobacion.Manual) { Write-Log "Se ignora $($ultima.Tag): su código no tiene una versión nueva." }
+        $ultima = $null
+    }
     if (-not $ultima -or $ultima.Version -le [version]$Version) {
         if ($Comprobacion.Manual) {
             Write-Log "Tienes la última versión ($Version)."
@@ -916,6 +923,19 @@ function Complete-UpdateCheck($Comprobacion) {
         return
     } finally {
         $form.Cursor = [System.Windows.Forms.Cursors]::Default
+    }
+
+    # Comprobar que el código instalado tiene de verdad la versión de la
+    # etiqueta; si no, ofrecerla otra vez al reiniciar sería un bucle.
+    $instalada = $null
+    $linea = Select-String -Path $ScriptPath -Pattern "^\`$Version = '([\d.]+)'" | Select-Object -First 1
+    if ($linea) { $instalada = [version]$linea.Matches[0].Groups[1].Value }
+    if ($instalada -and $instalada -lt $ultima.Version) {
+        $Config.EtiquetaIgnorada = $ultima.Tag
+        Save-Config (Get-FormConfig)
+        Write-Log "La etiqueta $($ultima.Tag) contiene la versión $instalada; no se volverá a ofrecer."
+        Show-Aviso ("La etiqueta $($ultima.Tag) apunta a un código con la versión $instalada, no a la $($ultima.Version).`n`n" +
+            "No se volverá a ofrecer. Al publicar, sube `$Version en WakeOnLan.ps1 antes de crear la etiqueta (ver README).")
     }
 
     Write-Log "Actualizado a $($ultima.Tag). Reiniciando…"

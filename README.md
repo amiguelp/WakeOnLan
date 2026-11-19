@@ -48,7 +48,7 @@ Si la carpeta del script es un clon de git (tiene `.git`), en lugar de sobrescri
    git push origin main v1.1.0
    ```
 
-La etiqueta tiene que coincidir con `$Version`: si la etiqueta es mayor que la versión del código que contiene, el script ofrecerá actualizar cada vez que arranque.
+La etiqueta tiene que coincidir con `$Version`: si la etiqueta es mayor que la versión del código que contiene, el script la instala, ve que la versión no ha cambiado, avisa y ya no la vuelve a ofrecer (lo guarda en `config.json` como `EtiquetaIgnorada`).
 
 ## Requisitos en el PC remoto
 
